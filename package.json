@@ -7,6 +7,7 @@
   },
   "scripts": {
     "start": "node cli.js",
-    "check": "node --check cli.js"
+    "check": "node --check cli.js && node --check context.js && node --check providers.js",
+    "test": "node --test"
   }
 }
