@@ -99,7 +99,7 @@ The line above the prompt shows every provider currently used by a task or recor
 limits  codex [██████░] 98% 3 calls  │  claude limit unavailable 8 calls
 ```
 
-Context IDE records request and token usage exposed by the child CLI. For Codex, it reads the real rate-limit window events from local Codex session metadata and displays the tightest remaining percentage; `/usage` shows each available window separately. Subscription ceilings are not available programmatically from every other provider, so those are labeled `limit unavailable` instead of showing a mystery value. Limits are never estimated from unrelated token counts. Provider limit errors are detected automatically, including reset text when the CLI supplies it. You can enter a percentage reported by a provider UI and later return to automatic detection:
+Context IDE records request and token usage exposed by the child CLI. For Codex, it reads the real rate-limit window events from local Codex session metadata and displays the tightest remaining percentage; `/usage` shows each available window separately. Claude does not return a remaining subscription percentage after successful calls, so it displays `available · limit hidden`; failed limit responses display `0%` and the provider-supplied reset time until a later successful request clears them. Other unmeasurable providers are labeled `limit unavailable`. Limits are never estimated from unrelated token counts. You can enter a percentage reported by a provider UI and later return to automatic detection:
 
 ```text
 /limit claude 15 5:30pm

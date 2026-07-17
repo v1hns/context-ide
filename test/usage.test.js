@@ -31,7 +31,17 @@ test('tracks measured usage without inventing a ceiling', () => {
   assert.equal(usage.requests, 1);
   assert.equal(usage.inputTokens, 120);
   assert.equal(usage.remainingPercent, null);
-  assert.equal(renderBar(usage, 5), 'limit unavailable');
+  assert.equal(usage.status, 'available');
+  assert.equal(renderBar(usage, 5), 'available · limit hidden');
+});
+
+test('a successful request clears stale automatic exhaustion', () => {
+  const state = { usage: { claude: { status: 'exhausted', remainingPercent: 0, resetAt: '10:30pm', manual: false } } };
+  recordSuccess(state, 'claude', { input_tokens: 2, output_tokens: 4 });
+  const usage = usageFor(state, 'claude');
+  assert.equal(usage.status, 'available');
+  assert.equal(usage.remainingPercent, null);
+  assert.equal(usage.resetAt, '');
 });
 
 test('reads real Codex remaining percentages from session events', () => {

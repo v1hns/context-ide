@@ -43,12 +43,15 @@ function recordSuccess(state, provider, reported = {}) {
   const current = usageFor(state, provider);
   const input = Number(reported.input_tokens ?? reported.inputTokens ?? 0) || 0;
   const output = Number(reported.output_tokens ?? reported.outputTokens ?? 0) || 0;
+  const availability = current.manual
+    ? { status: current.status, remainingPercent: current.remainingPercent, resetAt: current.resetAt }
+    : { status: 'available', remainingPercent: null, resetAt: '' };
   state.usage[provider] = {
     ...current,
+    ...availability,
     requests: current.requests + 1,
     inputTokens: current.inputTokens + input,
     outputTokens: current.outputTokens + output,
-    status: current.manual ? current.status : (current.remainingPercent == null ? 'unknown' : current.status),
     lastUsedAt: new Date().toISOString(),
     lastError: ''
   };
@@ -99,7 +102,7 @@ function score(usage) {
 
 function renderBar(usage, width = 8) {
   const safeWidth = Math.max(4, Math.min(20, Number(width) || 8));
-  if (usage.remainingPercent == null) return 'limit unavailable';
+  if (usage.remainingPercent == null) return usage.status === 'available' ? 'available · limit hidden' : 'limit unavailable';
   const filled = Math.round((usage.remainingPercent / 100) * safeWidth);
   return `[${'█'.repeat(filled)}${'░'.repeat(safeWidth - filled)}] ${Math.round(usage.remainingPercent)}%`;
 }
