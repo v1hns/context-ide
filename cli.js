@@ -14,6 +14,45 @@ const C = {
   cyan: '\x1b[36m', violet: '\x1b[35m', green: '\x1b[32m', red: '\x1b[31m', yellow: '\x1b[33m'
 };
 
+const PROVIDERS = {
+  codex: {
+    command: 'codex',
+    args: () => ['exec', '--skip-git-repo-check', '--color', 'never', '-'],
+    input: prompt => prompt,
+    setup: 'Install Codex CLI and run: codex login'
+  },
+  claude: {
+    command: 'claude',
+    args: () => ['--print', '--output-format', 'text'],
+    input: prompt => prompt,
+    setup: 'Install Claude Code and run: claude auth login'
+  },
+  kimi: {
+    command: 'kimi',
+    args: prompt => ['-p', prompt, '--output-format', 'text'],
+    input: () => '',
+    setup: 'Install Kimi Code CLI and run: kimi login'
+  },
+  gemini: {
+    command: 'gemini',
+    args: prompt => ['-p', prompt],
+    input: () => '',
+    setup: 'Install @google/gemini-cli and sign in with Google'
+  },
+  copilot: {
+    command: 'copilot',
+    args: prompt => ['-p', prompt, '-s'],
+    input: () => '',
+    setup: 'Install GitHub Copilot CLI and run: copilot login'
+  },
+  deepseek: {
+    command: 'ollama',
+    args: () => ['run', 'deepseek-r1'],
+    input: prompt => prompt,
+    setup: 'Install Ollama, then run: ollama pull deepseek-r1'
+  }
+};
+
 const defaults = () => ({
   version: 1,
   universalContext: 'Project: Context IDE\nKeep durable decisions here so agent switches do not lose them.',
@@ -44,6 +83,11 @@ function activeTab() {
 
 function id() { return `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`; }
 function providerColor(provider) { return provider === 'claude' ? C.violet : C.cyan; }
+function commandExists(command) {
+  return (process.env.PATH || '').split(path.delimiter).some(folder => {
+    try { fs.accessSync(path.join(folder, command), fs.constants.X_OK); return true; } catch { return false; }
+  });
+}
 function promptLabel() {
   const tab = activeTab();
   return `${providerColor(tab.provider)}${tab.provider}${C.reset} ${C.dim}[${tab.title}]${C.reset} › `;
@@ -51,7 +95,7 @@ function promptLabel() {
 function prompt() { if (!busy) rl.setPrompt(promptLabel()), rl.prompt(); }
 
 function banner() {
-  console.log(`${C.bold}Context IDE${C.reset}  ${C.dim}Codex + Claude Code subscriptions${C.reset}`);
+  console.log(`${C.bold}Context IDE${C.reset}  ${C.dim}multi-agent subscription + local workspace${C.reset}`);
   console.log(`${C.dim}Type /help for commands. Your workspace is saved locally.${C.reset}\n`);
   status();
 }
@@ -109,15 +153,22 @@ function run(command, args, input) {
 
 async function askAgent(text) {
   const tab = activeTab();
+  const provider = PROVIDERS[tab.provider];
+  if (!provider) {
+    console.error(`${C.red}Unknown provider: ${tab.provider}${C.reset}`);
+    return prompt();
+  }
+  if (!commandExists(provider.command)) {
+    console.error(`${C.red}${tab.provider} is not installed.${C.reset}\n${C.dim}${provider.setup}${C.reset}\n`);
+    return prompt();
+  }
   const fullPrompt = buildPrompt(tab, text);
   tab.messages.push({ role: 'user', content: text });
   save();
   busy = true;
   console.log(`${C.dim}${tab.provider} is working…${C.reset}`);
   try {
-    const answer = tab.provider === 'claude'
-      ? await run('claude', ['--print', '--output-format', 'text'], fullPrompt)
-      : await run('codex', ['exec', '--skip-git-repo-check', '--color', 'never', '-'], fullPrompt);
+    const answer = await run(provider.command, provider.args(fullPrompt), provider.input(fullPrompt));
     const content = answer || '(No response)';
     tab.messages.push({ role: 'assistant', provider: tab.provider, content });
     console.log(`\n${providerColor(tab.provider)}${C.bold}${tab.provider}${C.reset}\n${content}\n`);
@@ -133,7 +184,8 @@ async function askAgent(text) {
 function help() {
   console.log(`
 ${C.bold}Conversation${C.reset}
-  /agent codex|claude   switch the active task's CLI agent
+  /agent <provider>     switch the active task's CLI agent
+  /providers            show providers, availability, and setup
   /clear                clear this task's conversation
   /status               show active task details
 
@@ -162,8 +214,14 @@ function command(line) {
     case 'help': help(); break;
     case 'status': status(); break;
     case 'tabs': listTabs(); break;
+    case 'providers':
+      Object.entries(PROVIDERS).forEach(([key, provider]) => {
+        const ready = commandExists(provider.command);
+        console.log(`${ready ? C.green + '● ready' : C.yellow + '○ setup'}${C.reset}  ${key.padEnd(9)} ${C.dim}${ready ? provider.command : provider.setup}${C.reset}`);
+      });
+      break;
     case 'agent':
-      if (!['codex', 'claude'].includes(rest)) console.log(`${C.yellow}Usage: /agent codex|claude${C.reset}`);
+      if (!PROVIDERS[rest]) console.log(`${C.yellow}Choose: ${Object.keys(PROVIDERS).join(', ')}${C.reset}`);
       else { tab.provider = rest; save(); status(); }
       break;
     case 'new': {

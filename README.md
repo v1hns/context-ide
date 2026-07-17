@@ -1,14 +1,13 @@
 # Context IDE
 
-A dependency-free terminal workspace for switching between Codex and Claude Code without losing shared context.
+A dependency-free terminal workspace for switching between local AI coding agents without losing shared context.
 
-It invokes the locally installed `codex` and `claude` CLIs. Authentication and usage therefore come from your existing Codex and Claude Code subscription sessions—there are no API keys or direct API calls in this project.
+It invokes locally installed agent CLIs. Authentication and usage come from each CLI's existing subscription or local model session—there are no API keys or direct API calls in this project.
 
 ## Requirements
 
 - Node.js 18+
-- Codex CLI, signed in (`codex login`)
-- Claude Code, signed in (`claude auth login`)
+- At least one supported provider CLI (see below)
 
 ## Run
 
@@ -32,8 +31,8 @@ Workspace state is stored at `~/.context-ide/workspace.json` and is never commit
 | Command | Action |
 | --- | --- |
 | `/help` | Show commands |
-| `/agent codex` | Use the local Codex subscription |
-| `/agent claude` | Use the local Claude Code subscription |
+| `/providers` | Show providers, availability, and setup hints |
+| `/agent <provider>` | Switch the active task's agent |
 | `/new <title>` | Create and switch to a task |
 | `/tabs` | List task tabs |
 | `/switch <number>` | Switch tasks |
@@ -48,6 +47,19 @@ Workspace state is stored at `~/.context-ide/workspace.json` and is never commit
 | `/exit` | Save and quit |
 
 Any line that does not begin with `/` is sent to the active CLI agent. Conversation history, universal context, and attached task context are included with each turn.
+
+## Providers
+
+| Provider | Authentication route | Command |
+| --- | --- | --- |
+| Codex | ChatGPT/Codex subscription via `codex login` | `codex` |
+| Claude | Claude subscription via `claude auth login` | `claude` |
+| Kimi | Kimi membership/OAuth via `kimi login` | `kimi` |
+| Gemini | Google account sign-in | `gemini` |
+| Copilot | GitHub Copilot subscription | `copilot` |
+| DeepSeek | Fully local model through Ollama | `ollama run deepseek-r1` |
+
+DeepSeek does not have an official subscription-authenticated coding CLI adapter here. The Ollama route keeps it local and avoids API keys and direct API calls.
 
 ## Permissions
 
