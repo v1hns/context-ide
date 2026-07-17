@@ -64,7 +64,7 @@ test('manual remaining percentage controls low threshold', () => {
   const state = {};
   setManualLimit(state, 'kimi', 15, 'tomorrow');
   assert.equal(isLow(usageFor(state, 'kimi'), 20), true);
-  assert.match(renderBar(usageFor(state, 'kimi'), 10), /15%/);
+  assert.match(renderBar(usageFor(state, 'kimi'), 10), /85% used/);
   setManualLimit(state, 'kimi', null);
   assert.equal(usageFor(state, 'kimi').manual, false);
 });

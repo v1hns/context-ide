@@ -83,7 +83,7 @@ function statusBar() {
     const usage = usageFor(state, name);
     const color = usage.status === 'unknown' ? C.dim : usage.status === 'exhausted' ? C.red : isLow(usage, state.settings.lowThreshold) ? C.yellow : C.green;
     if (usage.status === 'exhausted') return `${color}${name}: blocked${usage.resetAt ? ` until ${usage.resetAt}` : ''}${C.reset}`;
-    if (usage.remainingPercent != null) return `${color}${name}: ${renderBar(usage, state.settings.barWidth).replace('%', '% left')}${C.reset}`;
+    if (usage.remainingPercent != null) return `${color}${name}: ${renderBar(usage, state.settings.barWidth)}${C.reset}`;
     return `${color}${name}: ${usage.status === 'available' ? 'ready (quota not exposed)' : 'quota unavailable'}${C.reset}`;
   });
   if (parts.length) console.log(`${C.dim}models${C.reset}  ${parts.join('  │  ')}`);
@@ -136,7 +136,7 @@ function usageStatus() {
     for (const window of usage.limitWindows || []) {
       const label = window.windowMinutes >= 10080 ? `${Math.round(window.windowMinutes / 10080)}w` : window.windowMinutes >= 1440 ? `${Math.round(window.windowMinutes / 1440)}d` : `${Math.round(window.windowMinutes / 60)}h`;
       const reset = window.resetsAt ? new Date(window.resetsAt * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'unknown';
-      console.log(`${C.dim}  ${label} window: ${window.remainingPercent}% remaining · resets ${reset}${C.reset}`);
+      console.log(`${C.dim}  ${label} window: ${100 - window.remainingPercent}% used · resets ${reset}${C.reset}`);
     }
   });
 }
