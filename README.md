@@ -1,32 +1,54 @@
 # Context IDE
 
-A dependency-free local prototype for working across agent personas without losing shared context.
+A dependency-free terminal workspace for switching between Codex and Claude Code without losing shared context.
 
-## Features
+It invokes the locally installed `codex` and `claude` CLIs. Authentication and usage therefore come from your existing Codex and Claude Code subscription sessions—there are no API keys or direct API calls in this project.
 
-- Chrome-style task tabs with independent conversation histories
-- Switchable, user-defined agents and models
-- Universal context visible to every agent
-- Tab attachments that inject related task conversations into the active task
-- A context graph and exact context preview
-- Browser-local persistence
-- Server-side OpenAI API calls, keeping the API key out of the browser
+## Requirements
+
+- Node.js 18+
+- Codex CLI, signed in (`codex login`)
+- Claude Code, signed in (`claude auth login`)
 
 ## Run
 
-Requires Node.js 18 or newer.
-
 ```bash
-cd /Users/vihaanshringi/context-ide
-OPENAI_API_KEY="your-key" npm start
+git clone https://github.com/v1hns/context-ide.git
+cd context-ide
+npm start
 ```
 
-Then open <http://127.0.0.1:4173>.
+Or make the `context-ide` command available globally:
 
-Without `OPENAI_API_KEY`, the interface and persistence work, but sending a message shows a configuration error.
+```bash
+npm link
+context-ide
+```
 
-## Architecture
+Workspace state is stored at `~/.context-ide/workspace.json` and is never committed.
 
-The workspace is stored under one versioned `localStorage` key. Each request sends the active agent definition, universal context, the current tab history, and condensed histories from attached tabs to the local server. The server adds these as model instructions and calls the OpenAI Responses API.
+## Commands
 
-This is intentionally dependency-free for a fast local start. A production version should add accounts, encrypted server-side workspace storage, context indexing/retrieval, streaming, tool permissions, and provider-specific adapters.
+| Command | Action |
+| --- | --- |
+| `/help` | Show commands |
+| `/agent codex` | Use the local Codex subscription |
+| `/agent claude` | Use the local Claude Code subscription |
+| `/new <title>` | Create and switch to a task |
+| `/tabs` | List task tabs |
+| `/switch <number>` | Switch tasks |
+| `/rename <title>` | Rename the active task |
+| `/attach <number>` | Add another task's recent conversation as context |
+| `/detach <number>` | Remove attached context |
+| `/context` | Show universal context |
+| `/context set <text>` | Replace universal context |
+| `/context add <text>` | Append universal context |
+| `/clear` | Clear the active conversation |
+| `/status` | Show the active task, agent, and attachments |
+| `/exit` | Save and quit |
+
+Any line that does not begin with `/` is sent to the active CLI agent. Conversation history, universal context, and attached task context are included with each turn.
+
+## Permissions
+
+The child CLIs retain their own configured permissions and safety settings. Context IDE does not pass permission-bypass flags.
