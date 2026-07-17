@@ -36,14 +36,16 @@ function run(command, args, input, cwd = process.cwd()) {
 function parseCodexJson(stdout) {
   let sessionId;
   let answer = '';
+  let usage = {};
   for (const line of stdout.split('\n')) {
     try {
       const event = JSON.parse(line);
       if (event.type === 'thread.started') sessionId = event.thread_id;
       if (event.type === 'item.completed' && event.item?.type === 'agent_message') answer = event.item.text || answer;
+      if (event.type === 'turn.completed' && event.usage) usage = event.usage;
     } catch { /* ignore non-event output */ }
   }
-  return { answer, sessionId };
+  return { answer, sessionId, usage };
 }
 
 async function runProvider(name, prompt, options = {}) {
@@ -62,8 +64,13 @@ async function runProvider(name, prompt, options = {}) {
     const sessionArgs = options.ephemeral
       ? ['--no-session-persistence']
       : options.sessionId ? ['--resume', options.sessionId] : ['--session-id', newId];
-    const result = await run('claude', ['--print', '--output-format', 'text', ...sessionArgs], prompt, cwd);
-    return { answer: result.stdout, sessionId: options.sessionId || newId };
+    const result = await run('claude', ['--print', '--output-format', 'json', ...sessionArgs], prompt, cwd);
+    try {
+      const parsed = JSON.parse(result.stdout);
+      return { answer: parsed.result || parsed.output || '', sessionId: parsed.session_id || options.sessionId || newId, usage: parsed.usage || {} };
+    } catch {
+      return { answer: result.stdout, sessionId: options.sessionId || newId, usage: {} };
+    }
   }
   if (name === 'kimi') {
     const result = await run('kimi', ['-p', prompt, '--output-format', 'text'], '', cwd);

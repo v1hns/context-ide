@@ -44,6 +44,14 @@ Workspace state is stored at `~/.context-ide/workspace.json` and is never commit
 | `/context add <text>` | Append universal context |
 | `/clear` | Clear the active conversation |
 | `/status` | Show the active task, agent, and attachments |
+| `/usage` | Show measured calls/tokens and known remaining limits |
+| `/limit <provider> <0-100\|auto> [reset]` | Set or clear a manual remaining-limit reading |
+| `/config` | Show interface and delegation settings |
+| `/config statusbar <on\|off>` | Toggle the bottom status line |
+| `/config delegation <on\|off>` | Toggle low-limit delegation prompts |
+| `/config ping <on\|off>` | Toggle the terminal bell for delegation |
+| `/config threshold <1-99>` | Set the low-limit percentage |
+| `/config barwidth <4-20>` | Set status-bar width |
 | `/budget [tokens]` | Show or set the token-aware context budget |
 | `/summary` | Show the rolling task summary |
 | `/summary now` | Summarize older context immediately |
@@ -80,6 +88,23 @@ Privacy is configured independently for every provider. The four fields are `uni
 ```
 
 The token count is an offline estimate rather than a provider tokenizer result, so it intentionally leaves headroom for provider instructions and output. Budgets range from 4,000 to 48,000 tokens; the upper bound also keeps prompts safe for CLIs that accept them as command arguments.
+
+## Limits and delegation
+
+The line above the prompt shows every provider currently used by a task or recorded in workspace usage:
+
+```text
+limits  codex [???????] ? 3 calls  │  claude [██░░░░░] 25% 8 calls
+```
+
+Context IDE records request and token usage exposed by the child CLI. Subscription ceilings and remaining percentages are not available programmatically from every provider, so an unknown limit is shown as `?`. It is never estimated from unrelated token counts. Provider limit errors are detected automatically, including reset text when the CLI supplies it. You can enter a percentage reported by a provider UI and later return to automatic detection:
+
+```text
+/limit claude 15 5:30pm
+/limit claude auto
+```
+
+When the active provider is at or below the configured threshold—or reports an exhausted quota—Context IDE rings the terminal bell and asks before retrying the same request with the healthiest installed provider. It never delegates without confirmation. Customize this behavior with `/config`.
 
 ## Providers
 

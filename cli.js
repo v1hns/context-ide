@@ -7,6 +7,7 @@ const path = require('node:path');
 const readline = require('node:readline');
 const { DEFAULT_BUDGET, buildPrompt, defaultPrivacy, estimateTokens, privacyFor, summaryCandidate, summaryPrompt } = require('./context');
 const { PROVIDERS, commandExists, run, runProvider } = require('./providers');
+const { detectLimitError, isLow, recordLimitError, recordSuccess, renderBar, score, setManualLimit, usageFor } = require('./usage');
 
 const DATA_DIR = path.join(os.homedir(), '.context-ide');
 const STATE_FILE = path.join(DATA_DIR, 'workspace.json');
@@ -16,8 +17,10 @@ const C = {
 };
 
 const defaults = () => ({
-  version: 2,
+  version: 3,
   contextBudget: DEFAULT_BUDGET,
+  settings: { statusBar: true, delegation: true, ping: true, lowThreshold: 20, barWidth: 7 },
+  usage: {},
   privacy: Object.fromEntries(Object.keys(PROVIDERS).map(name => [name, defaultPrivacy()])),
   universalContext: 'Project: Context IDE\nKeep durable decisions here so agent switches do not lose them.',
   activeTabId: 'welcome',
@@ -26,7 +29,7 @@ const defaults = () => ({
 
 function migrate(raw) {
   const base = defaults();
-  const migrated = { ...base, ...raw, version: 2, privacy: { ...base.privacy, ...(raw.privacy || {}) } };
+  const migrated = { ...base, ...raw, version: 3, settings: { ...base.settings, ...(raw.settings || {}) }, usage: raw.usage || {}, privacy: { ...base.privacy, ...(raw.privacy || {}) } };
   migrated.tabs = raw.tabs.map(tab => ({ summary: '', summaryThrough: 0, sessions: {}, ...tab }));
   return migrated;
 }
@@ -58,7 +61,25 @@ function promptLabel() {
   const tab = activeTab();
   return `${providerColor(tab.provider)}${tab.provider}${C.reset} ${C.dim}[${tab.title}]${C.reset} › `;
 }
-function prompt() { if (!busy) rl.setPrompt(promptLabel()), rl.prompt(); }
+function usedProviders() {
+  return [...new Set([...state.tabs.map(tab => tab.provider), ...Object.keys(state.usage || {})])].filter(name => PROVIDERS[name]);
+}
+function statusBar() {
+  if (!state.settings.statusBar) return;
+  const parts = usedProviders().map(name => {
+    const usage = usageFor(state, name);
+    const color = usage.status === 'unknown' ? C.dim : usage.status === 'exhausted' ? C.red : isLow(usage, state.settings.lowThreshold) ? C.yellow : C.green;
+    const reset = usage.resetAt ? ` ↻${usage.resetAt}` : '';
+    return `${color}${name}${C.reset} ${renderBar(usage, state.settings.barWidth)} ${C.dim}${usage.requests} calls${reset}${C.reset}`;
+  });
+  if (parts.length) console.log(`${C.dim}limits${C.reset}  ${parts.join('  │  ')}`);
+}
+function prompt() {
+  if (busy) return;
+  statusBar();
+  rl.setPrompt(promptLabel());
+  rl.prompt();
+}
 
 function banner() {
   console.log(`${C.bold}Context IDE${C.reset}  ${C.dim}multi-agent subscription + local workspace${C.reset}`);
@@ -86,6 +107,18 @@ function sessionsStatus(tab = activeTab()) {
   entries.forEach(([provider, session]) => console.log(`${provider.padEnd(9)} ${session.id} ${C.dim}synced through message ${session.syncedThrough || 0}${C.reset}`));
 }
 
+function configStatus() {
+  console.log(`${C.bold}Interface settings${C.reset}`);
+  Object.entries(state.settings).forEach(([key, value]) => console.log(`  ${key.padEnd(14)} ${value}`));
+}
+
+function usageStatus() {
+  usedProviders().forEach(name => {
+    const usage = usageFor(state, name);
+    console.log(`${C.bold}${name}${C.reset} ${renderBar(usage, state.settings.barWidth)} · ${usage.requests} calls · ${usage.inputTokens + usage.outputTokens} measured tokens${usage.resetAt ? ` · resets ${usage.resetAt}` : ''}${usage.manual ? ' · manual limit' : ''}`);
+  });
+}
+
 function listTabs() {
   state.tabs.forEach((tab, index) => {
     const marker = tab.id === state.activeTabId ? `${C.green}●${C.reset}` : '○';
@@ -107,61 +140,102 @@ async function updateSummary(tab, providerName, force = false) {
   try {
     const result = await runProvider(providerName, summaryPrompt(tab, candidate), { ephemeral: true, cwd: process.cwd() });
     if (!result.answer) return false;
+    recordSuccess(state, providerName, result.usage);
     tab.summary = result.answer;
     tab.summaryThrough = candidate.through;
     save();
     return true;
   } catch (error) {
+    recordLimitError(state, providerName, error.message);
     console.log(`${C.yellow}Summary skipped: ${error.message}${C.reset}`);
     return false;
   }
 }
 
-async function askAgent(text) {
+function delegationTarget(from) {
+  return Object.keys(PROVIDERS)
+    .filter(name => name !== from && commandExists(PROVIDERS[name].command) && !isLow(usageFor(state, name), state.settings.lowThreshold))
+    .sort((a, b) => score(usageFor(state, b)) - score(usageFor(state, a)))[0];
+}
+
+function requestDelegation(from, reason) {
+  const target = delegationTarget(from);
+  if (!state.settings.delegation || !target) return Promise.resolve(null);
+  if (state.settings.ping) process.stdout.write('\x07');
+  const detail = reason ? ` (${reason})` : '';
+  return new Promise(resolve => {
+    rl.question(`${C.yellow}${from} is low${detail}.${C.reset} Delegate this request to ${C.bold}${target}${C.reset}? [Y/n] `, answer => {
+      resolve(/^n(?:o)?$/i.test(answer.trim()) ? null : target);
+    });
+  });
+}
+
+async function askAgent(text, options = {}) {
   const tab = activeTab();
-  const provider = PROVIDERS[tab.provider];
+  const providerName = tab.provider;
+  const provider = PROVIDERS[providerName];
   if (!provider) {
-    console.error(`${C.red}Unknown provider: ${tab.provider}${C.reset}`);
+    console.error(`${C.red}Unknown provider: ${providerName}${C.reset}`);
     return prompt();
   }
   if (!commandExists(provider.command)) {
-    console.error(`${C.red}${tab.provider} is not installed.${C.reset}\n${C.dim}${provider.setup}${C.reset}\n`);
+    console.error(`${C.red}${providerName} is not installed.${C.reset}\n${C.dim}${provider.setup}${C.reset}\n`);
     return prompt();
+  }
+  const currentUsage = usageFor(state, providerName);
+  if (!options.skipPreflight && isLow(currentUsage, state.settings.lowThreshold)) {
+    const target = await requestDelegation(providerName, currentUsage.resetAt ? `resets ${currentUsage.resetAt}` : currentUsage.status);
+    if (target) {
+      tab.provider = target;
+      save();
+      return askAgent(text, { skipPreflight: true });
+    }
   }
   busy = true;
   rl.pause();
-  console.log(`${C.dim}${tab.provider} is working…${C.reset}`);
+  console.log(`${C.dim}${providerName} is working…${C.reset}`);
+  let limitFailure;
   try {
-    await updateSummary(tab, tab.provider);
-    const packed = buildPrompt(state, tab, tab.provider, text);
+    await updateSummary(tab, providerName);
+    const packed = buildPrompt(state, tab, providerName, text);
     const policy = packed.policy;
     const nativeCapable = provider.nativeSessions && policy.native;
-    const session = nativeCapable ? tab.sessions[tab.provider] : undefined;
+    const session = nativeCapable ? tab.sessions[providerName] : undefined;
     let result;
     try {
-      result = await runProvider(tab.provider, packed.prompt, { sessionId: session?.id, cwd: process.cwd() });
+      result = await runProvider(providerName, packed.prompt, { sessionId: session?.id, cwd: process.cwd() });
     } catch (error) {
-      if (!session?.id) throw error;
+      if (!session?.id || detectLimitError(error.message)) throw error;
       console.log(`${C.yellow}Native session unavailable; rebuilding it from portable context.${C.reset}`);
-      delete tab.sessions[tab.provider];
-      result = await runProvider(tab.provider, buildPrompt(state, tab, tab.provider, text).prompt, { cwd: process.cwd() });
+      delete tab.sessions[providerName];
+      result = await runProvider(providerName, buildPrompt(state, tab, providerName, text).prompt, { cwd: process.cwd() });
     }
     tab.messages.push({ role: 'user', content: text });
     const content = result.answer || '(No response)';
-    tab.messages.push({ role: 'assistant', provider: tab.provider, content });
+    tab.messages.push({ role: 'assistant', provider: providerName, content });
     if (nativeCapable && result.sessionId) {
-      tab.sessions[tab.provider] = { id: result.sessionId, syncedThrough: tab.messages.length, updatedAt: new Date().toISOString() };
+      tab.sessions[providerName] = { id: result.sessionId, syncedThrough: tab.messages.length, updatedAt: new Date().toISOString() };
     }
-    console.log(`\n${providerColor(tab.provider)}${C.bold}${tab.provider}${C.reset}\n${content}\n`);
+    recordSuccess(state, providerName, result.usage);
+    console.log(`\n${providerColor(providerName)}${C.bold}${providerName}${C.reset}\n${content}\n`);
     console.log(`${C.dim}Context: ~${packed.estimatedTokens}/${packed.budget} tokens${nativeCapable ? ' · native session on' : ''}${C.reset}`);
   } catch (error) {
-    console.error(`${C.red}Could not run ${tab.provider}: ${error.message}${C.reset}\n`);
+    limitFailure = recordLimitError(state, providerName, error.message);
+    console.error(`${C.red}Could not run ${providerName}: ${error.message}${C.reset}\n`);
   } finally {
     busy = false;
     rl.resume();
     save();
-    prompt();
   }
+  if (limitFailure) {
+    const target = await requestDelegation(providerName, limitFailure.resetAt ? `resets ${limitFailure.resetAt}` : limitFailure.status);
+    if (target) {
+      tab.provider = target;
+      save();
+      return askAgent(text, { skipPreflight: true });
+    }
+  }
+  prompt();
 }
 
 async function gitCommand(input) {
@@ -204,6 +278,12 @@ function help() {
 ${C.bold}Conversation${C.reset}
   /agent <provider>     switch the active task's CLI agent
   /providers            show providers, availability, and setup
+  /usage                show measured usage and known limits
+  /limit <provider> <0-100|auto> [reset time]
+  /config               show customizable interface settings
+  /config statusbar|delegation|ping <on|off>
+  /config threshold <1-99>
+  /config barwidth <4-20>
   /budget [tokens]      show or set the prompt context budget
   /summary              show the rolling summary
   /summary now          summarize older context now
@@ -254,6 +334,30 @@ function command(line) {
         console.log(`${ready ? C.green + '● ready' : C.yellow + '○ setup'}${C.reset}  ${key.padEnd(9)} ${C.dim}${ready ? provider.command : provider.setup}${C.reset}`);
       });
       break;
+    case 'usage': usageStatus(); break;
+    case 'limit': {
+      const [providerName, value, ...resetWords] = rest.split(/\s+/);
+      if (!PROVIDERS[providerName] || !value) {
+        console.log(`${C.yellow}Usage: /limit <provider> <0-100|auto> [reset time]${C.reset}`);
+      } else if (value === 'auto') {
+        setManualLimit(state, providerName, null); save(); usageStatus();
+      } else {
+        const percent = Number(value);
+        if (!Number.isFinite(percent) || percent < 0 || percent > 100) console.log(`${C.yellow}Remaining percent must be 0 through 100.${C.reset}`);
+        else { setManualLimit(state, providerName, percent, resetWords.join(' ')); save(); usageStatus(); }
+      }
+      break;
+    }
+    case 'config': {
+      if (!rest) { configStatus(); break; }
+      const [key, value] = rest.split(/\s+/);
+      const booleanKeys = { statusbar: 'statusBar', delegation: 'delegation', ping: 'ping' };
+      if (booleanKeys[key] && ['on', 'off'].includes(value)) state.settings[booleanKeys[key]] = value === 'on';
+      else if (key === 'threshold' && Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 99) state.settings.lowThreshold = Number(value);
+      else if (key === 'barwidth' && Number.isInteger(Number(value)) && Number(value) >= 4 && Number(value) <= 20) state.settings.barWidth = Number(value);
+      else { console.log(`${C.yellow}Usage: /config statusbar|delegation|ping on|off, /config threshold 1-99, or /config barwidth 4-20${C.reset}`); break; }
+      save(); configStatus(); break;
+    }
     case 'budget': {
       if (!rest) console.log(`${C.bold}Context budget:${C.reset} ${state.contextBudget} estimated input tokens`);
       else {
