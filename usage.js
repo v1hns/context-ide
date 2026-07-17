@@ -1,5 +1,11 @@
 'use strict';
 
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+let codexLimitCache = { checkedAt: 0, value: null };
+
 function blankUsage() {
   return { requests: 0, inputTokens: 0, outputTokens: 0, remainingPercent: null, status: 'unknown', resetAt: '', manual: false };
 }
@@ -93,9 +99,81 @@ function score(usage) {
 
 function renderBar(usage, width = 8) {
   const safeWidth = Math.max(4, Math.min(20, Number(width) || 8));
-  if (usage.remainingPercent == null) return `[${'?'.repeat(safeWidth)}] ?`;
+  if (usage.remainingPercent == null) return 'limit unavailable';
   const filled = Math.round((usage.remainingPercent / 100) * safeWidth);
   return `[${'█'.repeat(filled)}${'░'.repeat(safeWidth - filled)}] ${Math.round(usage.remainingPercent)}%`;
 }
 
-module.exports = { blankUsage, detectLimitError, isLow, normalizeErrorMessage, recordLimitError, recordSuccess, renderBar, sanitizeResetAt, sanitizeUsageEntry, score, setManualLimit, usageFor };
+function parseCodexRateLimits(text) {
+  const lines = String(text).split('\n');
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    try {
+      const event = JSON.parse(lines[index]);
+      const limits = event.payload?.rate_limits;
+      if (!limits) continue;
+      const windows = [limits.primary, limits.secondary].filter(Boolean).map(window => ({
+        usedPercent: Number(window.used_percent) || 0,
+        remainingPercent: Math.max(0, 100 - (Number(window.used_percent) || 0)),
+        windowMinutes: Number(window.window_minutes) || 0,
+        resetsAt: Number(window.resets_at) || 0
+      }));
+      if (!windows.length) continue;
+      return { windows, planType: limits.plan_type || '', reachedType: limits.rate_limit_reached_type || '' };
+    } catch { /* skip partial/non-JSON lines */ }
+  }
+  return null;
+}
+
+function latestJsonl(root) {
+  let latest = null;
+  function visit(directory, depth = 0) {
+    if (depth > 5) return;
+    let entries;
+    try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const target = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(target, depth + 1);
+      else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+        const mtime = fs.statSync(target).mtimeMs;
+        if (!latest || mtime > latest.mtime) latest = { path: target, mtime };
+      }
+    }
+  }
+  visit(root);
+  return latest?.path;
+}
+
+function readTail(file, bytes = 524288) {
+  const size = fs.statSync(file).size;
+  const length = Math.min(size, bytes);
+  const buffer = Buffer.alloc(length);
+  const descriptor = fs.openSync(file, 'r');
+  try { fs.readSync(descriptor, buffer, 0, length, size - length); } finally { fs.closeSync(descriptor); }
+  return buffer.toString('utf8');
+}
+
+function readCodexRateLimits() {
+  if (Date.now() - codexLimitCache.checkedAt < 30000) return codexLimitCache.value;
+  let value = null;
+  try {
+    const root = path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'sessions');
+    const file = latestJsonl(root);
+    if (file) value = parseCodexRateLimits(readTail(file));
+  } catch { value = null; }
+  codexLimitCache = { checkedAt: Date.now(), value };
+  return value;
+}
+
+function refreshCodexLimit(state) {
+  const limits = readCodexRateLimits();
+  if (!limits) return null;
+  state.usage ||= {};
+  const current = usageFor(state, 'codex');
+  if (current.manual) return current;
+  const tightest = limits.windows.reduce((lowest, window) => window.remainingPercent < lowest.remainingPercent ? window : lowest);
+  const resetAt = tightest.resetsAt ? new Date(tightest.resetsAt * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+  state.usage.codex = { ...current, remainingPercent: tightest.remainingPercent, status: tightest.remainingPercent === 0 ? 'exhausted' : 'ok', resetAt, limitWindows: limits.windows, planType: limits.planType, limitSource: 'codex-session' };
+  return state.usage.codex;
+}
+
+module.exports = { blankUsage, detectLimitError, isLow, normalizeErrorMessage, parseCodexRateLimits, readCodexRateLimits, recordLimitError, recordSuccess, refreshCodexLimit, renderBar, sanitizeResetAt, sanitizeUsageEntry, score, setManualLimit, usageFor };

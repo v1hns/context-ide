@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detectLimitError, isLow, normalizeErrorMessage, recordLimitError, recordSuccess, renderBar, sanitizeUsageEntry, setManualLimit, usageFor } = require('../usage');
+const { detectLimitError, isLow, normalizeErrorMessage, parseCodexRateLimits, recordLimitError, recordSuccess, renderBar, sanitizeUsageEntry, setManualLimit, usageFor } = require('../usage');
 
 test('detects exhausted quota and reset time from provider errors', () => {
   const signal = detectLimitError("You've hit your session limit · resets 5:30pm (America/Los_Angeles)");
@@ -31,7 +31,14 @@ test('tracks measured usage without inventing a ceiling', () => {
   assert.equal(usage.requests, 1);
   assert.equal(usage.inputTokens, 120);
   assert.equal(usage.remainingPercent, null);
-  assert.match(renderBar(usage, 5), /\?{5}/);
+  assert.equal(renderBar(usage, 5), 'limit unavailable');
+});
+
+test('reads real Codex remaining percentages from session events', () => {
+  const event = JSON.stringify({ payload: { rate_limits: { plan_type: 'plus', primary: { used_percent: 7, window_minutes: 300, resets_at: 1777171578 }, secondary: { used_percent: 1, window_minutes: 10080, resets_at: 1777758378 } } } });
+  const limits = parseCodexRateLimits(`junk\n${event}\n`);
+  assert.equal(limits.planType, 'plus');
+  assert.deepEqual(limits.windows.map(window => window.remainingPercent), [93, 99]);
 });
 
 test('manual remaining percentage controls low threshold', () => {

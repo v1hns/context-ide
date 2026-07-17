@@ -96,10 +96,10 @@ The token count is an offline estimate rather than a provider tokenizer result, 
 The line above the prompt shows every provider currently used by a task or recorded in workspace usage:
 
 ```text
-limits  codex [???????] ? 3 calls  │  claude [██░░░░░] 25% 8 calls
+limits  codex [██████░] 98% 3 calls  │  claude limit unavailable 8 calls
 ```
 
-Context IDE records request and token usage exposed by the child CLI. Subscription ceilings and remaining percentages are not available programmatically from every provider, so an unknown limit is shown as `?`. It is never estimated from unrelated token counts. Provider limit errors are detected automatically, including reset text when the CLI supplies it. You can enter a percentage reported by a provider UI and later return to automatic detection:
+Context IDE records request and token usage exposed by the child CLI. For Codex, it reads the real rate-limit window events from local Codex session metadata and displays the tightest remaining percentage; `/usage` shows each available window separately. Subscription ceilings are not available programmatically from every other provider, so those are labeled `limit unavailable` instead of showing a mystery value. Limits are never estimated from unrelated token counts. Provider limit errors are detected automatically, including reset text when the CLI supplies it. You can enter a percentage reported by a provider UI and later return to automatic detection:
 
 ```text
 /limit claude 15 5:30pm

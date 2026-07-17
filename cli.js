@@ -8,7 +8,7 @@ const readline = require('node:readline');
 const { spawn } = require('node:child_process');
 const { DEFAULT_BUDGET, buildPrompt, defaultPrivacy, estimateTokens, privacyFor, summaryCandidate, summaryPrompt } = require('./context');
 const { PROVIDERS, commandExists, run, runProvider } = require('./providers');
-const { detectLimitError, isLow, recordLimitError, recordSuccess, renderBar, sanitizeUsageEntry, score, setManualLimit, usageFor } = require('./usage');
+const { detectLimitError, isLow, recordLimitError, recordSuccess, refreshCodexLimit, renderBar, sanitizeUsageEntry, score, setManualLimit, usageFor } = require('./usage');
 
 const DATA_DIR = path.join(os.homedir(), '.context-ide');
 const STATE_FILE = path.join(DATA_DIR, 'workspace.json');
@@ -77,6 +77,7 @@ function usedProviders() {
 }
 function statusBar() {
   if (!state.settings.statusBar) return;
+  refreshCodexLimit(state);
   const parts = usedProviders().map(name => {
     const usage = usageFor(state, name);
     const color = usage.status === 'unknown' ? C.dim : usage.status === 'exhausted' ? C.red : isLow(usage, state.settings.lowThreshold) ? C.yellow : C.green;
@@ -125,9 +126,15 @@ function configStatus() {
 }
 
 function usageStatus() {
+  refreshCodexLimit(state);
   usedProviders().forEach(name => {
     const usage = usageFor(state, name);
     console.log(`${C.bold}${name}${C.reset} ${renderBar(usage, state.settings.barWidth)} · ${usage.requests} calls · ${usage.inputTokens + usage.outputTokens} measured tokens${usage.resetAt ? ` · resets ${usage.resetAt}` : ''}${usage.manual ? ' · manual limit' : ''}`);
+    for (const window of usage.limitWindows || []) {
+      const label = window.windowMinutes >= 10080 ? `${Math.round(window.windowMinutes / 10080)}w` : window.windowMinutes >= 1440 ? `${Math.round(window.windowMinutes / 1440)}d` : `${Math.round(window.windowMinutes / 60)}h`;
+      const reset = window.resetsAt ? new Date(window.resetsAt * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'unknown';
+      console.log(`${C.dim}  ${label} window: ${window.remainingPercent}% remaining · resets ${reset}${C.reset}`);
+    }
   });
 }
 
