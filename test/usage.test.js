@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detectLimitError, isLow, normalizeErrorMessage, parseCodexRateLimits, recordLimitError, recordSuccess, renderBar, sanitizeUsageEntry, setManualLimit, usageFor } = require('../usage');
+const { detectLimitError, isLow, normalizeErrorMessage, parseClaudeRateLimits, parseCodexRateLimits, recordLimitError, recordSuccess, renderBar, sanitizeUsageEntry, setManualLimit, usageFor } = require('../usage');
 
 test('detects exhausted quota and reset time from provider errors', () => {
   const signal = detectLimitError("You've hit your session limit · resets 5:30pm (America/Los_Angeles)");
@@ -49,6 +49,15 @@ test('reads real Codex remaining percentages from session events', () => {
   const limits = parseCodexRateLimits(`junk\n${event}\n`);
   assert.equal(limits.planType, 'plus');
   assert.deepEqual(limits.windows.map(window => window.remainingPercent), [93, 99]);
+});
+
+test('reads Claude five-hour and weekly remaining percentages', () => {
+  const limits = parseClaudeRateLimits({
+    five_hour: { utilization: 12.5, resets_at: '2026-07-16T22:00:00Z' },
+    seven_day: { utilization: 44, resets_at: '2026-07-20T22:00:00Z' }
+  });
+  assert.deepEqual(limits.windows.map(window => window.remainingPercent), [87.5, 56]);
+  assert.deepEqual(limits.windows.map(window => window.label), ['5h', '7d']);
 });
 
 test('manual remaining percentage controls low threshold', () => {

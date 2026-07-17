@@ -3,8 +3,10 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 
 let codexLimitCache = { checkedAt: 0, value: null };
+let claudeLimitCache = { checkedAt: 0, value: null };
 
 function blankUsage() {
   return { requests: 0, inputTokens: 0, outputTokens: 0, remainingPercent: null, status: 'unknown', resetAt: '', manual: false };
@@ -179,4 +181,44 @@ function refreshCodexLimit(state) {
   return state.usage.codex;
 }
 
-module.exports = { blankUsage, detectLimitError, isLow, normalizeErrorMessage, parseCodexRateLimits, readCodexRateLimits, recordLimitError, recordSuccess, refreshCodexLimit, renderBar, sanitizeResetAt, sanitizeUsageEntry, score, setManualLimit, usageFor };
+function parseClaudeRateLimits(data) {
+  const parsed = typeof data === 'string' ? JSON.parse(data) : data;
+  const windows = [
+    ['5h', 300, parsed.five_hour],
+    ['7d', 10080, parsed.seven_day]
+  ].filter(([, , window]) => window && Number.isFinite(Number(window.utilization))).map(([label, windowMinutes, window]) => ({
+    label,
+    usedPercent: Number(window.utilization),
+    remainingPercent: Math.max(0, 100 - Number(window.utilization)),
+    windowMinutes,
+    resetsAt: window.resets_at ? Math.floor(new Date(window.resets_at).getTime() / 1000) : 0
+  }));
+  return windows.length ? { windows } : null;
+}
+
+function readClaudeRateLimits() {
+  if (Date.now() - claudeLimitCache.checkedAt < 180000) return claudeLimitCache.value;
+  let value = null;
+  try {
+    const output = execFileSync(process.execPath, [path.join(__dirname, 'claude-quota.js')], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 8000, maxBuffer: 1024 * 1024
+    });
+    value = parseClaudeRateLimits(output);
+  } catch { value = null; }
+  claudeLimitCache = { checkedAt: Date.now(), value };
+  return value;
+}
+
+function refreshClaudeLimit(state) {
+  const limits = readClaudeRateLimits();
+  if (!limits) return null;
+  state.usage ||= {};
+  const current = usageFor(state, 'claude');
+  if (current.manual) return current;
+  const tightest = limits.windows.reduce((lowest, window) => window.remainingPercent < lowest.remainingPercent ? window : lowest);
+  const resetAt = tightest.resetsAt ? new Date(tightest.resetsAt * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+  state.usage.claude = { ...current, remainingPercent: tightest.remainingPercent, status: tightest.remainingPercent === 0 ? 'exhausted' : 'ok', resetAt, limitWindows: limits.windows, limitSource: 'anthropic-oauth-usage' };
+  return state.usage.claude;
+}
+
+module.exports = { blankUsage, detectLimitError, isLow, normalizeErrorMessage, parseClaudeRateLimits, parseCodexRateLimits, readClaudeRateLimits, readCodexRateLimits, recordLimitError, recordSuccess, refreshClaudeLimit, refreshCodexLimit, renderBar, sanitizeResetAt, sanitizeUsageEntry, score, setManualLimit, usageFor };

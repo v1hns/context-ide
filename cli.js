@@ -8,7 +8,7 @@ const readline = require('node:readline');
 const { spawn } = require('node:child_process');
 const { DEFAULT_BUDGET, buildPrompt, defaultPrivacy, estimateTokens, privacyFor, summaryCandidate, summaryPrompt } = require('./context');
 const { PROVIDERS, commandExists, run, runProvider } = require('./providers');
-const { detectLimitError, isLow, recordLimitError, recordSuccess, refreshCodexLimit, renderBar, sanitizeUsageEntry, score, setManualLimit, usageFor } = require('./usage');
+const { detectLimitError, isLow, recordLimitError, recordSuccess, refreshClaudeLimit, refreshCodexLimit, renderBar, sanitizeUsageEntry, score, setManualLimit, usageFor } = require('./usage');
 
 const DATA_DIR = path.join(os.homedir(), '.context-ide');
 const STATE_FILE = path.join(DATA_DIR, 'workspace.json');
@@ -78,6 +78,7 @@ function usedProviders() {
 function statusBar() {
   if (!state.settings.statusBar) return;
   refreshCodexLimit(state);
+  refreshClaudeLimit(state);
   const parts = usedProviders().map(name => {
     const usage = usageFor(state, name);
     const color = usage.status === 'unknown' ? C.dim : usage.status === 'exhausted' ? C.red : isLow(usage, state.settings.lowThreshold) ? C.yellow : C.green;
@@ -128,6 +129,7 @@ function configStatus() {
 
 function usageStatus() {
   refreshCodexLimit(state);
+  refreshClaudeLimit(state);
   usedProviders().forEach(name => {
     const usage = usageFor(state, name);
     console.log(`${C.bold}${name}${C.reset} ${renderBar(usage, state.settings.barWidth)} · ${usage.requests} calls · ${usage.inputTokens + usage.outputTokens} measured tokens${usage.resetAt ? ` · resets ${usage.resetAt}` : ''}${usage.manual ? ' · manual limit' : ''}`);
