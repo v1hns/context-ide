@@ -44,6 +44,11 @@ Workspace state is stored at `~/.context-ide/workspace.json` and is never commit
 | `/context add <text>` | Append universal context |
 | `/clear` | Clear the active conversation |
 | `/status` | Show the active task, agent, and attachments |
+| `/git status` | Show repository status |
+| `/git diff` | Show unstaged changes |
+| `/git add` | Stage all workspace changes |
+| `/git commit <message>` | Commit staged changes |
+| `/git push` | Push to the tracked GitHub remote |
 | `/exit` | Save and quit |
 
 Any line that does not begin with `/` is sent to the active CLI agent. Conversation history, universal context, and attached task context are included with each turn.
@@ -57,9 +62,7 @@ Any line that does not begin with `/` is sent to the active CLI agent. Conversat
 | Kimi | Kimi membership/OAuth via `kimi login` | `kimi` |
 | Gemini | Google account sign-in | `gemini` |
 | Copilot | GitHub Copilot subscription | `copilot` |
-| DeepSeek | Fully local model through Ollama | `ollama run deepseek-r1` |
-
-DeepSeek does not have an official subscription-authenticated coding CLI adapter here. The Ollama route keeps it local and avoids API keys and direct API calls.
+DeepSeek is intentionally not included: it does not currently offer an official subscription-authenticated coding CLI, and Context IDE does not use local models or direct model API integrations.
 
 ## Permissions
 

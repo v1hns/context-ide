@@ -44,12 +44,6 @@ const PROVIDERS = {
     args: prompt => ['-p', prompt, '-s'],
     input: () => '',
     setup: 'Install GitHub Copilot CLI and run: copilot login'
-  },
-  deepseek: {
-    command: 'ollama',
-    args: () => ['run', 'deepseek-r1'],
-    input: prompt => prompt,
-    setup: 'Install Ollama, then run: ollama pull deepseek-r1'
   }
 };
 
@@ -166,6 +160,7 @@ async function askAgent(text) {
   tab.messages.push({ role: 'user', content: text });
   save();
   busy = true;
+  rl.pause();
   console.log(`${C.dim}${tab.provider} is working…${C.reset}`);
   try {
     const answer = await run(provider.command, provider.args(fullPrompt), provider.input(fullPrompt));
@@ -176,7 +171,43 @@ async function askAgent(text) {
     console.error(`${C.red}Could not run ${tab.provider}: ${error.message}${C.reset}\n`);
   } finally {
     busy = false;
+    rl.resume();
     save();
+    prompt();
+  }
+}
+
+async function gitCommand(input) {
+  const [subcommand, ...words] = input.split(/\s+/).filter(Boolean);
+  let args;
+  switch (subcommand) {
+    case 'status': args = ['status', '--short', '--branch']; break;
+    case 'diff': args = ['diff']; break;
+    case 'log': args = ['log', '-10', '--oneline', '--decorate']; break;
+    case 'remotes': args = ['remote', '-v']; break;
+    case 'add': args = ['add', '-A']; break;
+    case 'commit':
+      if (!words.length) {
+        console.log(`${C.yellow}Usage: /git commit <message>${C.reset}`);
+        return prompt();
+      }
+      args = ['commit', '-m', words.join(' ')];
+      break;
+    case 'push': args = ['push']; break;
+    default:
+      console.log(`${C.yellow}Choose: status, diff, log, remotes, add, commit <message>, push${C.reset}`);
+      return prompt();
+  }
+  busy = true;
+  rl.pause();
+  try {
+    const output = await run('git', args, '');
+    console.log(`${output || C.green + 'Done.' + C.reset}\n`);
+  } catch (error) {
+    console.error(`${C.red}Git failed: ${error.message}${C.reset}\n`);
+  } finally {
+    busy = false;
+    rl.resume();
     prompt();
   }
 }
@@ -202,6 +233,15 @@ ${C.bold}Shared context${C.reset}
   /context set <text>   replace universal context
   /context add <text>   append universal context
 
+${C.bold}GitHub workflow${C.reset}
+  /git status           show repository status
+  /git diff             show unstaged changes
+  /git log              show recent commits
+  /git remotes          show GitHub remotes
+  /git add              stage all workspace changes
+  /git commit <message> commit staged changes
+  /git push             push to the tracked remote
+
   /exit                 save and quit
 `);
 }
@@ -220,6 +260,7 @@ function command(line) {
         console.log(`${ready ? C.green + '● ready' : C.yellow + '○ setup'}${C.reset}  ${key.padEnd(9)} ${C.dim}${ready ? provider.command : provider.setup}${C.reset}`);
       });
       break;
+    case 'git': gitCommand(rest); return;
     case 'agent':
       if (!PROVIDERS[rest]) console.log(`${C.yellow}Choose: ${Object.keys(PROVIDERS).join(', ')}${C.reset}`);
       else { tab.provider = rest; save(); status(); }
