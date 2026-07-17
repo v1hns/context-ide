@@ -96,10 +96,10 @@ The token count is an offline estimate rather than a provider tokenizer result, 
 The line above the prompt shows every provider currently used by a task or recorded in workspace usage:
 
 ```text
-limits  codex [██████░] 98% 3 calls  │  claude limit unavailable 8 calls
+models  codex: [██████░] 98% left  │  claude: ready (quota not exposed)
 ```
 
-Context IDE records request and token usage exposed by the child CLI. For Codex, it reads the real rate-limit window events from local Codex session metadata and displays the tightest remaining percentage; `/usage` shows each available window separately. Claude does not return a remaining subscription percentage after successful calls, so it displays `available · limit hidden`; failed limit responses display `0%` and the provider-supplied reset time until a later successful request clears them. Other unmeasurable providers are labeled `limit unavailable`. Limits are never estimated from unrelated token counts. You can enter a percentage reported by a provider UI and later return to automatic detection:
+Context IDE records request and token usage exposed by the child CLI. For Codex, it reads the real rate-limit window events from local Codex session metadata and displays the tightest remaining percentage; `/usage` shows each available window separately. Claude does not return a remaining subscription percentage after successful calls, so the bar says `ready (quota not exposed)`; failed limit responses say `blocked until <reset time>` until a later successful request clears them. Other unmeasurable providers say `quota unavailable`. Limits are never estimated from unrelated token counts. Detailed call and token telemetry stays in `/usage`. You can enter a percentage reported by a provider UI and later return to automatic detection:
 
 ```text
 /limit claude 15 5:30pm

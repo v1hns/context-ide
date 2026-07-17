@@ -32,7 +32,7 @@ test('tracks measured usage without inventing a ceiling', () => {
   assert.equal(usage.inputTokens, 120);
   assert.equal(usage.remainingPercent, null);
   assert.equal(usage.status, 'available');
-  assert.equal(renderBar(usage, 5), 'available · limit hidden');
+  assert.equal(renderBar(usage, 5), 'ready (quota not exposed)');
 });
 
 test('a successful request clears stale automatic exhaustion', () => {

@@ -81,10 +81,11 @@ function statusBar() {
   const parts = usedProviders().map(name => {
     const usage = usageFor(state, name);
     const color = usage.status === 'unknown' ? C.dim : usage.status === 'exhausted' ? C.red : isLow(usage, state.settings.lowThreshold) ? C.yellow : C.green;
-    const reset = usage.resetAt ? ` ↻${usage.resetAt}` : '';
-    return `${color}${name}${C.reset} ${renderBar(usage, state.settings.barWidth)} ${C.dim}${usage.requests} calls${reset}${C.reset}`;
+    if (usage.status === 'exhausted') return `${color}${name}: blocked${usage.resetAt ? ` until ${usage.resetAt}` : ''}${C.reset}`;
+    if (usage.remainingPercent != null) return `${color}${name}: ${renderBar(usage, state.settings.barWidth).replace('%', '% left')}${C.reset}`;
+    return `${color}${name}: ${usage.status === 'available' ? 'ready (quota not exposed)' : 'quota unavailable'}${C.reset}`;
   });
-  if (parts.length) console.log(`${C.dim}limits${C.reset}  ${parts.join('  │  ')}`);
+  if (parts.length) console.log(`${C.dim}models${C.reset}  ${parts.join('  │  ')}`);
 }
 function prompt() {
   if (busy) return;

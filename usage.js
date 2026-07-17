@@ -102,7 +102,7 @@ function score(usage) {
 
 function renderBar(usage, width = 8) {
   const safeWidth = Math.max(4, Math.min(20, Number(width) || 8));
-  if (usage.remainingPercent == null) return usage.status === 'available' ? 'available · limit hidden' : 'limit unavailable';
+  if (usage.remainingPercent == null) return usage.status === 'available' ? 'ready (quota not exposed)' : 'quota unavailable';
   const filled = Math.round((usage.remainingPercent / 100) * safeWidth);
   return `[${'█'.repeat(filled)}${'░'.repeat(safeWidth - filled)}] ${Math.round(usage.remainingPercent)}%`;
 }
