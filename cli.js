@@ -5,32 +5,41 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const readline = require('node:readline');
+const { spawn } = require('node:child_process');
 const { DEFAULT_BUDGET, buildPrompt, defaultPrivacy, estimateTokens, privacyFor, summaryCandidate, summaryPrompt } = require('./context');
 const { PROVIDERS, commandExists, run, runProvider } = require('./providers');
 const { detectLimitError, isLow, recordLimitError, recordSuccess, renderBar, score, setManualLimit, usageFor } = require('./usage');
 
 const DATA_DIR = path.join(os.homedir(), '.context-ide');
 const STATE_FILE = path.join(DATA_DIR, 'workspace.json');
+const LEGACY_TITLE = 'Build the context layer';
+const LEGACY_CONTEXT = 'Project: Context IDE\nKeep durable decisions here so agent switches do not lose them.';
 const C = {
   reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m',
   cyan: '\x1b[36m', violet: '\x1b[35m', green: '\x1b[32m', red: '\x1b[31m', yellow: '\x1b[33m'
 };
 
 const defaults = () => ({
-  version: 3,
+  version: 4,
   contextBudget: DEFAULT_BUDGET,
   settings: { statusBar: true, delegation: true, ping: true, lowThreshold: 20, barWidth: 7 },
   usage: {},
   privacy: Object.fromEntries(Object.keys(PROVIDERS).map(name => [name, defaultPrivacy()])),
-  universalContext: 'Project: Context IDE\nKeep durable decisions here so agent switches do not lose them.',
+  universalContext: '',
   activeTabId: 'welcome',
-  tabs: [{ id: 'welcome', title: 'Build the context layer', provider: 'codex', attachedIds: [], messages: [], summary: '', summaryThrough: 0, sessions: {} }]
+  tabs: [{ id: 'welcome', title: 'General', cwd: process.cwd(), provider: 'codex', attachedIds: [], messages: [], summary: '', summaryThrough: 0, sessions: {} }]
 });
 
 function migrate(raw) {
   const base = defaults();
-  const migrated = { ...base, ...raw, version: 3, settings: { ...base.settings, ...(raw.settings || {}) }, usage: raw.usage || {}, privacy: { ...base.privacy, ...(raw.privacy || {}) } };
-  migrated.tabs = raw.tabs.map(tab => ({ summary: '', summaryThrough: 0, sessions: {}, ...tab }));
+  const migrated = { ...base, ...raw, version: 4, settings: { ...base.settings, ...(raw.settings || {}) }, usage: raw.usage || {}, privacy: { ...base.privacy, ...(raw.privacy || {}) } };
+  const legacyWelcome = raw.tabs.some(tab => tab.id === 'welcome' && tab.title === LEGACY_TITLE);
+  if (legacyWelcome && migrated.universalContext === LEGACY_CONTEXT) migrated.universalContext = '';
+  migrated.tabs = raw.tabs.map(tab => {
+    const next = { cwd: process.cwd(), summary: '', summaryThrough: 0, sessions: {}, ...tab };
+    if (tab.id === 'welcome' && tab.title === LEGACY_TITLE) return { ...next, title: 'General', messages: [], summary: '', summaryThrough: 0, sessions: {} };
+    return next;
+  });
   return migrated;
 }
 
@@ -44,6 +53,7 @@ function load() {
 
 let state = load();
 let busy = false;
+let restarting = false;
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
 
 function save() {
@@ -91,6 +101,7 @@ function status() {
   const tab = activeTab();
   const attached = (tab.attachedIds || []).map(tid => state.tabs.find(t => t.id === tid)?.title).filter(Boolean);
   console.log(`${C.bold}${tab.title}${C.reset} · ${providerColor(tab.provider)}${tab.provider}${C.reset} · ${tab.messages.length} messages`);
+  console.log(`${C.dim}Working directory: ${tab.cwd}${C.reset}`);
   if (attached.length) console.log(`${C.dim}Attached: ${attached.join(', ')}${C.reset}`);
   console.log(`${C.dim}Local history: ~${estimateTokens(tab.messages.map(message => message.content).join('\n'))} tokens · budget: ${state.contextBudget} · summarized: ${tab.summaryThrough || 0}/${tab.messages.length}${C.reset}`);
 }
@@ -138,7 +149,7 @@ async function updateSummary(tab, providerName, force = false) {
   if (!candidate) return false;
   console.log(`${C.dim}Compressing older context into a rolling summary…${C.reset}`);
   try {
-    const result = await runProvider(providerName, summaryPrompt(tab, candidate), { ephemeral: true, cwd: process.cwd() });
+    const result = await runProvider(providerName, summaryPrompt(tab, candidate), { ephemeral: true, cwd: tab.cwd });
     if (!result.answer) return false;
     recordSuccess(state, providerName, result.usage);
     tab.summary = result.answer;
@@ -203,12 +214,12 @@ async function askAgent(text, options = {}) {
     const session = nativeCapable ? tab.sessions[providerName] : undefined;
     let result;
     try {
-      result = await runProvider(providerName, packed.prompt, { sessionId: session?.id, cwd: process.cwd() });
+      result = await runProvider(providerName, packed.prompt, { sessionId: session?.id, cwd: tab.cwd });
     } catch (error) {
       if (!session?.id || detectLimitError(error.message)) throw error;
       console.log(`${C.yellow}Native session unavailable; rebuilding it from portable context.${C.reset}`);
       delete tab.sessions[providerName];
-      result = await runProvider(providerName, buildPrompt(state, tab, providerName, text).prompt, { cwd: process.cwd() });
+      result = await runProvider(providerName, buildPrompt(state, tab, providerName, text).prompt, { cwd: tab.cwd });
     }
     tab.messages.push({ role: 'user', content: text });
     const content = result.answer || '(No response)';
@@ -262,7 +273,7 @@ async function gitCommand(input) {
   busy = true;
   rl.pause();
   try {
-    const output = await run('git', args, '');
+    const output = await run('git', args, '', activeTab().cwd);
     console.log(`${output.stdout || output.stderr || C.green + 'Done.' + C.reset}\n`);
   } catch (error) {
     console.error(`${C.red}Git failed: ${error.message}${C.reset}\n`);
@@ -299,6 +310,7 @@ ${C.bold}Tasks${C.reset}
   /tabs                 list tasks
   /switch <number>      switch task
   /rename <title>       rename active task
+  /cd <path>            set this task's working directory
   /attach <number>      attach another task's context
   /detach <number>      detach a task
 
@@ -316,6 +328,7 @@ ${C.bold}GitHub workflow${C.reset}
   /git commit <message> commit staged changes
   /git push             push to the tracked remote
 
+  /restart              save and restart Context IDE
   /exit                 save and quit
 `);
 }
@@ -403,7 +416,7 @@ function command(line) {
       else { tab.provider = rest; save(); status(); }
       break;
     case 'new': {
-      const next = { id: id(), title: rest || 'Untitled task', provider: tab.provider, attachedIds: [], messages: [], summary: '', summaryThrough: 0, sessions: {} };
+      const next = { id: id(), title: rest || 'Untitled task', cwd: tab.cwd, provider: tab.provider, attachedIds: [], messages: [], summary: '', summaryThrough: 0, sessions: {} };
       state.tabs.push(next); state.activeTabId = next.id; save(); status(); break;
     }
     case 'switch': {
@@ -416,6 +429,17 @@ function command(line) {
       if (!rest) console.log(`${C.yellow}Usage: /rename <title>${C.reset}`);
       else { tab.title = rest; save(); status(); }
       break;
+    case 'cd': {
+      const target = path.resolve(tab.cwd, rest || '.');
+      try {
+        if (!fs.statSync(target).isDirectory()) throw new Error('not a directory');
+        tab.cwd = target;
+        tab.sessions = {};
+        save();
+        console.log(`${C.green}Working directory: ${target}${C.reset}`);
+      } catch { console.log(`${C.yellow}Directory not found: ${target}${C.reset}`); }
+      break;
+    }
     case 'attach': {
       const target = tabAt(rest);
       if (!target || target.id === tab.id) console.log(`${C.yellow}Choose another task number from /tabs.${C.reset}`);
@@ -435,6 +459,7 @@ function command(line) {
       else console.log(`${C.yellow}Usage: /context, /context set <text>, or /context add <text>${C.reset}`);
       break;
     case 'clear': tab.messages = []; tab.summary = ''; tab.summaryThrough = 0; tab.sessions = {}; save(); console.log(`${C.green}Conversation, summary, and native sessions cleared.${C.reset}`); break;
+    case 'restart': restarting = true; save(); rl.close(); return;
     case 'exit': save(); rl.close(); return;
     default: console.log(`${C.yellow}Unknown command. Type /help.${C.reset}`);
   }
@@ -448,7 +473,20 @@ rl.on('line', line => {
   else askAgent(text);
 });
 rl.on('SIGINT', () => { console.log('\n'); save(); rl.close(); });
-rl.on('close', () => { console.log(`${C.dim}Workspace saved. Bye.${C.reset}`); process.exit(0); });
+rl.on('close', () => {
+  if (restarting) {
+    console.log(`${C.dim}Restarting Context IDE…${C.reset}`);
+    const child = spawn(process.execPath, [__filename], { cwd: process.cwd(), env: process.env, stdio: 'inherit' });
+    child.on('error', error => { console.error(`${C.red}Restart failed: ${error.message}${C.reset}`); process.exit(1); });
+    child.on('exit', (code, signal) => {
+      if (signal) process.kill(process.pid, signal);
+      else process.exit(code ?? 0);
+    });
+    return;
+  }
+  console.log(`${C.dim}Workspace saved. Bye.${C.reset}`);
+  process.exit(0);
+});
 
 banner();
 prompt();

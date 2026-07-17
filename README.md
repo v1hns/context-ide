@@ -37,6 +37,7 @@ Workspace state is stored at `~/.context-ide/workspace.json` and is never commit
 | `/tabs` | List task tabs |
 | `/switch <number>` | Switch tasks |
 | `/rename <title>` | Rename the active task |
+| `/cd <path>` | Set the active task's working directory |
 | `/attach <number>` | Add another task's recent conversation as context |
 | `/detach <number>` | Remove attached context |
 | `/context` | Show universal context |
@@ -64,6 +65,7 @@ Workspace state is stored at `~/.context-ide/workspace.json` and is never commit
 | `/git add` | Stage all workspace changes |
 | `/git commit <message>` | Commit staged changes |
 | `/git push` | Push to the tracked GitHub remote |
+| `/restart` | Save the workspace and restart Context IDE |
 | `/exit` | Save and quit |
 
 Any line that does not begin with `/` is sent to the active CLI agent. Conversation history, universal context, and attached task context are included with each turn.
