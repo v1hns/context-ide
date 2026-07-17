@@ -12,6 +12,22 @@ function normalizeErrorMessage(message = '') {
   } catch { return text; }
 }
 
+function sanitizeResetAt(value = '') {
+  return String(value)
+    .split(/",\s*"|","|\n/)[0]
+    .replace(/["}]+$/, '')
+    .trim()
+    .slice(0, 120);
+}
+
+function sanitizeUsageEntry(entry = {}) {
+  return {
+    ...entry,
+    resetAt: sanitizeResetAt(entry.resetAt),
+    lastError: entry.lastError ? normalizeErrorMessage(entry.lastError) : ''
+  };
+}
+
 function usageFor(state, provider) {
   return { ...blankUsage(), ...(state.usage?.[provider] || {}) };
 }
@@ -82,4 +98,4 @@ function renderBar(usage, width = 8) {
   return `[${'█'.repeat(filled)}${'░'.repeat(safeWidth - filled)}] ${Math.round(usage.remainingPercent)}%`;
 }
 
-module.exports = { blankUsage, detectLimitError, isLow, normalizeErrorMessage, recordLimitError, recordSuccess, renderBar, score, setManualLimit, usageFor };
+module.exports = { blankUsage, detectLimitError, isLow, normalizeErrorMessage, recordLimitError, recordSuccess, renderBar, sanitizeResetAt, sanitizeUsageEntry, score, setManualLimit, usageFor };

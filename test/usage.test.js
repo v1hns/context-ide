@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detectLimitError, isLow, normalizeErrorMessage, recordLimitError, recordSuccess, renderBar, setManualLimit, usageFor } = require('../usage');
+const { detectLimitError, isLow, normalizeErrorMessage, recordLimitError, recordSuccess, renderBar, sanitizeUsageEntry, setManualLimit, usageFor } = require('../usage');
 
 test('detects exhausted quota and reset time from provider errors', () => {
   const signal = detectLimitError("You've hit your session limit · resets 5:30pm (America/Los_Angeles)");
@@ -16,6 +16,12 @@ test('extracts a clean limit message from Claude JSON errors', () => {
   assert.equal(normalizeErrorMessage(raw), "You've hit your session limit · resets 10:30pm (America/Los_Angeles)");
   const signal = detectLimitError(raw);
   assert.equal(signal.resetAt, '10:30pm (America/Los_Angeles)');
+});
+
+test('repairs reset text persisted by the older JSON parsing bug', () => {
+  const dirty = '10:30pm (America/Los_Angeles)","stop_reason":"stop_sequence","session_id":"abc"}';
+  const cleaned = sanitizeUsageEntry({ resetAt: dirty });
+  assert.equal(cleaned.resetAt, '10:30pm (America/Los_Angeles)');
 });
 
 test('tracks measured usage without inventing a ceiling', () => {

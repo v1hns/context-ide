@@ -8,7 +8,7 @@ const readline = require('node:readline');
 const { spawn } = require('node:child_process');
 const { DEFAULT_BUDGET, buildPrompt, defaultPrivacy, estimateTokens, privacyFor, summaryCandidate, summaryPrompt } = require('./context');
 const { PROVIDERS, commandExists, run, runProvider } = require('./providers');
-const { detectLimitError, isLow, recordLimitError, recordSuccess, renderBar, score, setManualLimit, usageFor } = require('./usage');
+const { detectLimitError, isLow, recordLimitError, recordSuccess, renderBar, sanitizeUsageEntry, score, setManualLimit, usageFor } = require('./usage');
 
 const DATA_DIR = path.join(os.homedir(), '.context-ide');
 const STATE_FILE = path.join(DATA_DIR, 'workspace.json');
@@ -32,7 +32,8 @@ const defaults = () => ({
 
 function migrate(raw) {
   const base = defaults();
-  const migrated = { ...base, ...raw, version: 4, settings: { ...base.settings, ...(raw.settings || {}) }, usage: raw.usage || {}, privacy: { ...base.privacy, ...(raw.privacy || {}) } };
+  const cleanUsage = Object.fromEntries(Object.entries(raw.usage || {}).map(([provider, usage]) => [provider, sanitizeUsageEntry(usage)]));
+  const migrated = { ...base, ...raw, version: 4, settings: { ...base.settings, ...(raw.settings || {}) }, usage: cleanUsage, privacy: { ...base.privacy, ...(raw.privacy || {}) } };
   const legacyWelcome = raw.tabs.some(tab => tab.id === 'welcome' && tab.title === LEGACY_TITLE);
   if (legacyWelcome && migrated.universalContext === LEGACY_CONTEXT) migrated.universalContext = '';
   migrated.tabs = raw.tabs.map(tab => {
