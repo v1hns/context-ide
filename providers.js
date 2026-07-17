@@ -48,6 +48,12 @@ function parseCodexJson(stdout) {
   return { answer, sessionId, usage };
 }
 
+function parseClaudeOutput(output) {
+  const parsed = JSON.parse(output);
+  if (parsed.is_error || parsed.api_error_status) throw new Error(parsed.result || parsed.error?.message || 'Claude request failed');
+  return { answer: parsed.result || parsed.output || '', sessionId: parsed.session_id, usage: parsed.usage || {} };
+}
+
 async function runProvider(name, prompt, options = {}) {
   const provider = PROVIDERS[name];
   if (!provider) throw new Error(`Unknown provider: ${name}`);
@@ -64,12 +70,20 @@ async function runProvider(name, prompt, options = {}) {
     const sessionArgs = options.ephemeral
       ? ['--no-session-persistence']
       : options.sessionId ? ['--resume', options.sessionId] : ['--session-id', newId];
-    const result = await run('claude', ['--print', '--output-format', 'json', ...sessionArgs], prompt, cwd);
     try {
-      const parsed = JSON.parse(result.stdout);
-      return { answer: parsed.result || parsed.output || '', sessionId: parsed.session_id || options.sessionId || newId, usage: parsed.usage || {} };
-    } catch {
-      return { answer: result.stdout, sessionId: options.sessionId || newId, usage: {} };
+      const result = await run('claude', ['--print', '--output-format', 'json', ...sessionArgs], prompt, cwd);
+      try {
+        const parsed = parseClaudeOutput(result.stdout);
+        return { ...parsed, sessionId: parsed.sessionId || options.sessionId || newId };
+      } catch (error) {
+        if (error instanceof SyntaxError) return { answer: result.stdout, sessionId: options.sessionId || newId, usage: {} };
+        throw error;
+      }
+    } catch (error) {
+      try { parseClaudeOutput(error.message); } catch (parsedError) {
+        if (!(parsedError instanceof SyntaxError)) throw parsedError;
+      }
+      throw error;
     }
   }
   if (name === 'kimi') {
@@ -84,4 +98,4 @@ async function runProvider(name, prompt, options = {}) {
   return { answer: result.stdout };
 }
 
-module.exports = { PROVIDERS, commandExists, run, runProvider };
+module.exports = { PROVIDERS, commandExists, parseClaudeOutput, run, runProvider };

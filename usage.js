@@ -4,6 +4,14 @@ function blankUsage() {
   return { requests: 0, inputTokens: 0, outputTokens: 0, remainingPercent: null, status: 'unknown', resetAt: '', manual: false };
 }
 
+function normalizeErrorMessage(message = '') {
+  const text = String(message);
+  try {
+    const parsed = JSON.parse(text);
+    return String(parsed.result || parsed.error?.message || parsed.message || text);
+  } catch { return text; }
+}
+
 function usageFor(state, provider) {
   return { ...blankUsage(), ...(state.usage?.[provider] || {}) };
 }
@@ -26,7 +34,7 @@ function recordSuccess(state, provider, reported = {}) {
 }
 
 function detectLimitError(message = '') {
-  const text = String(message);
+  const text = normalizeErrorMessage(message);
   const exhausted = /(hit|reached|exceeded|exhausted).{0,30}(session|usage|rate|quota|limit)|session limit|billing cycle quota|HTTP\s*429/i.test(text);
   const low = exhausted || /rate.?limit|quota|capacity/i.test(text);
   if (!low) return null;
@@ -40,7 +48,7 @@ function recordLimitError(state, provider, message) {
   state.usage ||= {};
   const current = usageFor(state, provider);
   if (current.manual) return current;
-  state.usage[provider] = { ...current, ...signal, lastError: String(message), lastUsedAt: new Date().toISOString() };
+  state.usage[provider] = { ...current, ...signal, lastError: normalizeErrorMessage(message), lastUsedAt: new Date().toISOString() };
   return state.usage[provider];
 }
 
@@ -74,4 +82,4 @@ function renderBar(usage, width = 8) {
   return `[${'█'.repeat(filled)}${'░'.repeat(safeWidth - filled)}] ${Math.round(usage.remainingPercent)}%`;
 }
 
-module.exports = { blankUsage, detectLimitError, isLow, recordLimitError, recordSuccess, renderBar, score, setManualLimit, usageFor };
+module.exports = { blankUsage, detectLimitError, isLow, normalizeErrorMessage, recordLimitError, recordSuccess, renderBar, score, setManualLimit, usageFor };
