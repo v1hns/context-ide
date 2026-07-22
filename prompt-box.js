@@ -15,7 +15,7 @@ const { clipVisible, visibleLength } = require('./ui');
 
 const ESC = '\x1b';
 const csi = code => `${ESC}[${code}`;
-const C = { reset: '\x1b[0m', dim: '\x1b[2m' };
+const C = { reset: '\x1b[0m', dim: '\x1b[2m', userGray: '\x1b[38;2;180;180;180m' };
 
 function trailingMarkerPrefixLength(value, marker) {
   const maximum = Math.min(value.length, marker.length - 1);
@@ -321,10 +321,11 @@ class PromptBox extends EventEmitter {
       return;
     }
     if (line.trim()) this.history.push(line);
-    // Echo the submitted line into the transcript above the box.
+    // Echo the submitted line into the transcript above the box, in a lighter
+    // gray so past user messages are easy to pick out from model output.
     const { text } = this.store.expand(line);
     const echoLines = (text || '').split('\n');
-    this._above(`${C.dim}›${C.reset} ${echoLines[0]}${echoLines.length > 1 ? `${C.dim} … (+${echoLines.length - 1} lines)${C.reset}` : ''}\n`);
+    this._above(`${C.dim}›${C.reset} ${C.userGray}${echoLines[0]}${C.reset}${echoLines.length > 1 ? `${C.dim} … (+${echoLines.length - 1} lines)${C.reset}` : ''}\n`);
     this._render();
     this.emit('line', line);
   }
