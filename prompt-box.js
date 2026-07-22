@@ -49,7 +49,10 @@ class PromptBox extends EventEmitter {
     this._origOut = output.write.bind(output);
     this._origErr = (process.stderr.write || (() => {})).bind(process.stderr);
     this._onData = chunk => this._feed(chunk.toString('utf8'));
-    this._onResize = () => this._resize();
+    // A drag-resize fires many events; coalesce them so the box repaints once,
+    // after the size settles, instead of once per intermediate width.
+    this._resizeTimer = null;
+    this._onResize = () => { clearTimeout(this._resizeTimer); this._resizeTimer = setTimeout(() => this._resize(), 120); };
   }
 
   // ---- lifecycle ---------------------------------------------------------
@@ -72,6 +75,7 @@ class PromptBox extends EventEmitter {
   close() {
     if (!this.started) { this.emit('close'); return; }
     this.started = false;
+    clearTimeout(this._resizeTimer);
     this.input.off('data', this._onData);
     this.output.off('resize', this._onResize);
     this.input.setRawMode?.(false);
@@ -122,7 +126,11 @@ class PromptBox extends EventEmitter {
 
   _resize() {
     if (!this.started) return;
-    this._applyRegion();
+    const g = this._geometry();
+    // Release the old scroll region, wipe from the box area down (removing any
+    // frame the terminal's reflow left behind), then reserve and repaint once.
+    this._origOut(csi('r') + csi(`${Math.max(1, g.topRow)};1H`) + csi('0J') + csi(`1;${g.scrollBottom}r`) + csi(`${g.scrollBottom};1H`));
+    this._render();
   }
 
   // ---- output above the box ---------------------------------------------
