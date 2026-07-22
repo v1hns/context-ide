@@ -20,7 +20,8 @@ const LEGACY_TITLE = 'Build the context layer';
 const LEGACY_CONTEXT = 'Project: Context IDE\nKeep durable decisions here so agent switches do not lose them.';
 const C = {
   reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m',
-  cyan: '\x1b[36m', violet: '\x1b[35m', green: '\x1b[32m', red: '\x1b[31m', yellow: '\x1b[33m'
+  cyan: '\x1b[36m', violet: '\x1b[35m', green: '\x1b[32m', red: '\x1b[31m', yellow: '\x1b[33m',
+  orange: '\x1b[38;2;255;153;0m', turquoise: '\x1b[38;2;64;224;208m', black: '\x1b[30m'
 };
 
 const defaults = () => ({
@@ -114,7 +115,7 @@ function activeTab() {
 }
 
 function id() { return `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`; }
-const PROVIDER_COLORS = { codex: C.cyan, claude: C.violet, kimi: C.green, gemini: C.yellow, copilot: C.red };
+const PROVIDER_COLORS = { codex: C.turquoise, claude: C.orange, kimi: C.black, gemini: C.yellow, copilot: C.red };
 function providerColor(provider) { return PROVIDER_COLORS[provider] || C.cyan; }
 // Prompt label for the readline fallback (the box shows provider/task in its
 // top border instead).
