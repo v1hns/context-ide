@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const readline = require('node:readline');
 const { spawn } = require('node:child_process');
-const { DEFAULT_BUDGET, buildPrompt, defaultPrivacy, estimateTokens, privacyFor, sessionContributors, summaryCandidate, summaryPrompt } = require('./context');
+const { DEFAULT_BUDGET, MAX_BUDGET, MIN_BUDGET, buildPrompt, defaultPrivacy, estimateTokens, privacyFor, sessionContributors, summaryCandidate, summaryPrompt } = require('./context');
 const { PasteInput, PasteStore } = require('./paste-input');
 const { PROVIDERS, buildRegistry, commandExists, providerAvailable, providerSetup, run, runProvider } = require('./providers');
 const { detectLimitError, isLow, recordLimitError, recordSuccess, refreshClaudeLimit, refreshCodexLimit, renderBar, sanitizeUsageEntry, score, setManualLimit, usageFor } = require('./usage');
@@ -40,6 +40,8 @@ function migrate(raw) {
   const base = defaults();
   const cleanUsage = Object.fromEntries(Object.entries(raw.usage || {}).map(([provider, usage]) => [provider, sanitizeUsageEntry(usage)]));
   const migrated = { ...base, ...raw, version: 5, settings: { ...base.settings, ...(raw.settings || {}) }, usage: cleanUsage, customProviders: Array.isArray(raw.customProviders) ? raw.customProviders : [], privacy: { ...base.privacy, ...(raw.privacy || {}) } };
+  // Lift workspaces still pinned to the old 24k default up to the new default.
+  if (raw.contextBudget === 24000) migrated.contextBudget = DEFAULT_BUDGET;
   const legacyWelcome = raw.tabs.some(tab => tab.id === 'welcome' && tab.title === LEGACY_TITLE);
   if (legacyWelcome && migrated.universalContext === LEGACY_CONTEXT) migrated.universalContext = '';
   migrated.tabs = raw.tabs.map(tab => {
@@ -542,7 +544,7 @@ function command(line) {
       if (!rest) console.log(`${C.bold}Context budget:${C.reset} ${state.contextBudget} estimated input tokens`);
       else {
         const value = Number(rest);
-        if (!Number.isInteger(value) || value < 4000 || value > 48000) console.log(`${C.yellow}Choose a budget from 4000 to 48000 tokens.${C.reset}`);
+        if (!Number.isInteger(value) || value < MIN_BUDGET || value > MAX_BUDGET) console.log(`${C.yellow}Choose a budget from ${MIN_BUDGET} to ${MAX_BUDGET} tokens.${C.reset}`);
         else { state.contextBudget = value; save(); console.log(`${C.green}Context budget set to ${value}.${C.reset}`); }
       }
       break;

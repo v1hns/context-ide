@@ -1,7 +1,8 @@
 'use strict';
 
-const DEFAULT_BUDGET = 24000;
+const DEFAULT_BUDGET = 128000;
 const MIN_BUDGET = 4000;
+const MAX_BUDGET = 200000;
 const SUMMARY_TARGET = 1200;
 
 function estimateTokens(text = '') {
@@ -161,6 +162,8 @@ function summaryPrompt(tab, candidate) {
 
 module.exports = {
   DEFAULT_BUDGET,
+  MAX_BUDGET,
+  MIN_BUDGET,
   advancedSince,
   buildPrompt,
   defaultPrivacy,
