@@ -6,7 +6,9 @@ Built-in providers invoke locally installed agent CLIs, so their authentication 
 
 ## Interface
 
-The prompt sits above a pinned status footer that stays visible while the conversation scrolls. The footer shows the shared context-window meter and every model's limit bars, so context and quotas are always in view directly below where you type. Toggle the pinned frame with `/config frame off` to fall back to a single inline status line.
+The prompt sits above a pinned status dock that stays fixed at the bottom of the terminal while the conversation scrolls above it. The dock shows the shared context-window meter and every model's limit bars, so context and quotas are always in view directly below where you type — and it never redraws or stacks per message. Toggle the pinned dock with `/config frame off` to fall back to a single inline status line.
+
+Every launch starts a **fresh session** with clean context, so a new conversation is never blended into whatever you were doing before. The previous transcript is archived to `~/.context-ide/history/` rather than discarded, and your config, tabs, imported models, and universal context are kept. A `/restart` (a code reload) resumes the in-progress conversation instead of clearing it. Turn the behavior off with `/config fresh off` to resume the last conversation on every launch.
 
 Pasted text behaves like Claude Code and Codex: a multi-line or long paste collapses to a `[Pasted text #1 +12 lines]` placeholder in the prompt instead of flooding the line, and expands back to the full content when you send the message.
 
@@ -59,7 +61,8 @@ Workspace state is stored at `~/.context-ide/workspace.json` and is never commit
 | `/limit <provider> <0-100\|auto> [reset]` | Set or clear a manual remaining-limit reading |
 | `/config` | Show interface and delegation settings |
 | `/config statusbar <on\|off>` | Toggle the status line |
-| `/config frame <on\|off>` | Toggle the pinned context/limits footer |
+| `/config frame <on\|off>` | Toggle the pinned context/limits dock |
+| `/config fresh <on\|off>` | Start each launch fresh (on) or resume the last conversation (off) |
 | `/config delegation <on\|off>` | Toggle low-limit delegation prompts |
 | `/config ping <on\|off>` | Toggle the terminal bell for delegation |
 | `/config threshold <1-99>` | Set the low-limit percentage |

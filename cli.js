@@ -14,6 +14,7 @@ const { Footer, bar, visibleLength } = require('./ui');
 
 const DATA_DIR = path.join(os.homedir(), '.context-ide');
 const STATE_FILE = path.join(DATA_DIR, 'workspace.json');
+const HISTORY_DIR = path.join(DATA_DIR, 'history');
 const LEGACY_TITLE = 'Build the context layer';
 const LEGACY_CONTEXT = 'Project: Context IDE\nKeep durable decisions here so agent switches do not lose them.';
 const C = {
@@ -24,7 +25,7 @@ const C = {
 const defaults = () => ({
   version: 5,
   contextBudget: DEFAULT_BUDGET,
-  settings: { statusBar: true, frame: true, delegation: true, ping: true, lowThreshold: 20, barWidth: 7 },
+  settings: { statusBar: true, frame: true, freshSessions: true, delegation: true, ping: true, lowThreshold: 20, barWidth: 7 },
   usage: {},
   customProviders: [],
   privacy: Object.fromEntries(Object.keys(PROVIDERS).map(name => [name, defaultPrivacy()])),
@@ -74,6 +75,35 @@ function save() {
   fs.writeFileSync(STATE_FILE, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
 }
 
+// Write the current transcripts to a timestamped archive so a fresh session
+// never destroys prior context — it just sets it aside.
+function archiveSession() {
+  const tabs = state.tabs.filter(tab => (tab.messages || []).length);
+  if (!tabs.length) return null;
+  fs.mkdirSync(HISTORY_DIR, { recursive: true, mode: 0o700 });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const file = path.join(HISTORY_DIR, `session-${stamp}.json`);
+  const snapshot = tabs.map(tab => ({ id: tab.id, title: tab.title, provider: tab.provider, messages: tab.messages, summary: tab.summary || '' }));
+  fs.writeFileSync(file, `${JSON.stringify(snapshot, null, 2)}\n`, { mode: 0o600 });
+  return file;
+}
+
+// Start every launch with clean context. Config, tabs, providers, and universal
+// context are kept; only the conversation transcripts are archived and cleared.
+function startFreshSession() {
+  const archived = archiveSession();
+  let cleared = 0;
+  for (const tab of state.tabs) {
+    if ((tab.messages || []).length) cleared += tab.messages.length;
+    tab.messages = [];
+    tab.summary = '';
+    tab.summaryThrough = 0;
+    tab.sessions = {};
+  }
+  if (cleared) save();
+  return { archived, cleared };
+}
+
 function activeTab() {
   return state.tabs.find(tab => tab.id === state.activeTabId) || state.tabs[0];
 }
@@ -83,17 +113,13 @@ const PROVIDER_COLORS = { codex: C.cyan, claude: C.violet, kimi: C.green, gemini
 function providerColor(provider) { return PROVIDER_COLORS[provider] || C.cyan; }
 function frameWidth() { return Math.max(24, Math.min(120, process.stdout.columns || 80)); }
 
-// A two-line prompt that draws the top and left edges of the input box. Its
-// bottom border and the context/limit bars are rendered by the pinned footer,
-// so together they frame the input like Claude Code's terminal.
+// A clean single-line prompt. It is intentionally not a box: a box redrawn
+// every turn stacks up in the scrollback. The stable framing lives entirely in
+// the pinned footer, which never moves.
 function promptLabel() {
   const tab = activeTab();
   const color = providerColor(tab.provider);
-  if (!frameOn()) return `${color}${C.bold}${tab.provider}${C.reset} ${C.dim}${tab.title}${C.reset} ${color}▸${C.reset} `;
-  const title = `${tab.provider} · ${tab.title}`;
-  const dashes = Math.max(1, frameWidth() - 4 - title.length);
-  const top = `${C.dim}╭─${C.reset} ${color}${title}${C.reset} ${C.dim}${'─'.repeat(dashes)}╮${C.reset}`;
-  return `${top}\n${C.dim}│${C.reset} ${color}▸${C.reset} `;
+  return `${color}${C.bold}${tab.provider}${C.reset} ${C.dim}${tab.title}${C.reset} ${color}▸${C.reset} `;
 }
 function usedProviders() {
   return [...new Set([...state.tabs.map(tab => tab.provider), ...Object.keys(state.usage || {})])].filter(name => registry[name]);
@@ -128,10 +154,11 @@ function footerLines() {
   const meterColor = pct >= 85 ? C.red : pct >= 65 ? C.yellow : C.green;
   const chips = usedProviders().map(providerChip);
   const context = `${meterColor}ctx ${bar(fill.fraction, 12)} ${pct}%${C.reset} ${C.dim}(${fill.tokens}/${fill.budget} tok)${C.reset}`;
-  const status = [context, ...chips, `${C.dim}${agents.length} agents${C.reset}`].join(`  ${C.dim}│${C.reset}  `);
-  // Bottom edge of the input box, then the context/limit bars inside it.
-  const bottom = `${C.dim}╰${'─'.repeat(Math.max(1, frameWidth() - 2))}╯${C.reset}`;
-  return [bottom, ` ${status}`];
+  const status = [context, ...chips, `${C.dim}${agents.length} agent${agents.length === 1 ? '' : 's'}${C.reset}`].join(`  ${C.dim}│${C.reset}  `);
+  // A stable pinned dock: a rule that separates the conversation from the
+  // permanent context/limit bars. Neither line ever scrolls or restacks.
+  const rule = `${C.dim}${'─'.repeat(frameWidth())}${C.reset}`;
+  return [rule, ` ${status}`];
 }
 
 // Inline status bar (used when the pinned frame is off or output is not a TTY).
@@ -418,7 +445,7 @@ ${C.bold}Conversation${C.reset}
   /usage                show measured usage and known limits
   /limit <provider> <0-100|auto> [reset time]
   /config               show customizable interface settings
-  /config statusbar|frame|delegation|ping <on|off>
+  /config statusbar|frame|fresh|delegation|ping <on|off>
   /config threshold <1-99>
   /config barwidth <4-20>
 
@@ -499,14 +526,14 @@ function command(line) {
     case 'config': {
       if (!rest) { configStatus(); break; }
       const [key, value] = rest.split(/\s+/);
-      const booleanKeys = { statusbar: 'statusBar', frame: 'frame', delegation: 'delegation', ping: 'ping' };
+      const booleanKeys = { statusbar: 'statusBar', frame: 'frame', fresh: 'freshSessions', delegation: 'delegation', ping: 'ping' };
       if (booleanKeys[key] && ['on', 'off'].includes(value)) {
         state.settings[booleanKeys[key]] = value === 'on';
         if (key === 'frame') { if (frameOn()) footer.enable(2); else footer.disable(); }
       }
       else if (key === 'threshold' && Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 99) state.settings.lowThreshold = Number(value);
       else if (key === 'barwidth' && Number.isInteger(Number(value)) && Number(value) >= 4 && Number(value) <= 20) state.settings.barWidth = Number(value);
-      else { console.log(`${C.yellow}Usage: /config statusbar|frame|delegation|ping on|off, /config threshold 1-99, or /config barwidth 4-20${C.reset}`); break; }
+      else { console.log(`${C.yellow}Usage: /config statusbar|frame|fresh|delegation|ping on|off, /config threshold 1-99, or /config barwidth 4-20${C.reset}`); break; }
       save(); configStatus(); break;
     }
     case 'budget': {
@@ -621,7 +648,7 @@ rl.on('close', () => {
   if (process.stdin.isTTY) process.stdout.write('\x1b[?2004l');
   if (restarting) {
     console.log(`${C.dim}Restarting Context IDE…${C.reset}`);
-    const child = spawn(process.execPath, [__filename], { cwd: process.cwd(), env: process.env, stdio: 'inherit' });
+    const child = spawn(process.execPath, [__filename, '--resume'], { cwd: process.cwd(), env: process.env, stdio: 'inherit' });
     child.on('error', error => { console.error(`${C.red}Restart failed: ${error.message}${C.reset}`); process.exit(1); });
     child.on('exit', (code, signal) => {
       if (signal) process.kill(process.pid, signal);
@@ -633,5 +660,14 @@ rl.on('close', () => {
   process.exit(0);
 });
 
+// A normal launch starts fresh; a /restart passes --resume to keep the
+// in-progress conversation across the code reload.
+const resuming = process.argv.includes('--resume');
+let freshResult = null;
+if (!resuming && state.settings.freshSessions !== false) freshResult = startFreshSession();
+
 banner();
+if (freshResult && freshResult.cleared) {
+  console.log(`${C.dim}Started a fresh session. Archived ${freshResult.cleared} message${freshResult.cleared === 1 ? '' : 's'} from your last one${freshResult.archived ? ` → ${path.basename(freshResult.archived)}` : ''}.${C.reset}\n`);
+}
 prompt();
