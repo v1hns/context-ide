@@ -10,7 +10,7 @@ const { DEFAULT_BUDGET, buildPrompt, defaultPrivacy, estimateTokens, privacyFor,
 const { PasteInput, PasteStore } = require('./paste-input');
 const { PROVIDERS, buildRegistry, commandExists, providerAvailable, providerSetup, run, runProvider } = require('./providers');
 const { detectLimitError, isLow, recordLimitError, recordSuccess, refreshClaudeLimit, refreshCodexLimit, renderBar, sanitizeUsageEntry, score, setManualLimit, usageFor } = require('./usage');
-const { Footer, bar } = require('./ui');
+const { Footer, bar, visibleLength } = require('./ui');
 
 const DATA_DIR = path.join(os.homedir(), '.context-ide');
 const STATE_FILE = path.join(DATA_DIR, 'workspace.json');
@@ -81,9 +81,19 @@ function activeTab() {
 function id() { return `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`; }
 const PROVIDER_COLORS = { codex: C.cyan, claude: C.violet, kimi: C.green, gemini: C.yellow, copilot: C.red };
 function providerColor(provider) { return PROVIDER_COLORS[provider] || C.cyan; }
+function frameWidth() { return Math.max(24, Math.min(120, process.stdout.columns || 80)); }
+
+// A two-line prompt that draws the top and left edges of the input box. Its
+// bottom border and the context/limit bars are rendered by the pinned footer,
+// so together they frame the input like Claude Code's terminal.
 function promptLabel() {
   const tab = activeTab();
-  return `${providerColor(tab.provider)}${C.bold}${tab.provider}${C.reset} ${C.dim}${tab.title}${C.reset} ${providerColor(tab.provider)}▸${C.reset} `;
+  const color = providerColor(tab.provider);
+  if (!frameOn()) return `${color}${C.bold}${tab.provider}${C.reset} ${C.dim}${tab.title}${C.reset} ${color}▸${C.reset} `;
+  const title = `${tab.provider} · ${tab.title}`;
+  const dashes = Math.max(1, frameWidth() - 4 - title.length);
+  const top = `${C.dim}╭─${C.reset} ${color}${title}${C.reset} ${C.dim}${'─'.repeat(dashes)}╮${C.reset}`;
+  return `${top}\n${C.dim}│${C.reset} ${color}▸${C.reset} `;
 }
 function usedProviders() {
   return [...new Set([...state.tabs.map(tab => tab.provider), ...Object.keys(state.usage || {})])].filter(name => registry[name]);
@@ -116,11 +126,12 @@ function footerLines() {
   const fill = contextFill();
   const pct = Math.round(fill.fraction * 100);
   const meterColor = pct >= 85 ? C.red : pct >= 65 ? C.yellow : C.green;
-  const rule = `${C.dim}${'─'.repeat(4)} shared session · ${agents.join(' + ')} ${'─'.repeat(4)}${C.reset}`;
   const chips = usedProviders().map(providerChip);
   const context = `${meterColor}ctx ${bar(fill.fraction, 12)} ${pct}%${C.reset} ${C.dim}(${fill.tokens}/${fill.budget} tok)${C.reset}`;
-  const status = [context, ...chips, `${providerColor(tab.provider)}● ${tab.provider}${C.reset}`].join(`  ${C.dim}│${C.reset}  `);
-  return [rule, status];
+  const status = [context, ...chips, `${C.dim}${agents.length} agents${C.reset}`].join(`  ${C.dim}│${C.reset}  `);
+  // Bottom edge of the input box, then the context/limit bars inside it.
+  const bottom = `${C.dim}╰${'─'.repeat(Math.max(1, frameWidth() - 2))}╯${C.reset}`;
+  return [bottom, ` ${status}`];
 }
 
 // Inline status bar (used when the pinned frame is off or output is not a TTY).
