@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildPrompt, summaryCandidate } = require('../context');
+const { buildPrompt, summaryCandidate, sessionContributors, advancedSince } = require('../context');
 
 function fixture() {
   const tab = {
@@ -45,6 +45,40 @@ test('native session receives only cross-provider updates', () => {
   assert.doesNotMatch(packed.prompt, /message-27/);
   assert.match(packed.prompt, /message-28/);
   assert.match(packed.prompt, /message-29/);
+});
+
+test('frames the shared session without mission language', () => {
+  const { state, tab } = fixture();
+  const packed = buildPrompt(state, tab, 'codex', 'go');
+  assert.match(packed.prompt, /share a single continuous session/);
+  assert.match(packed.prompt, /SHARED SESSION AGENTS/);
+  assert.doesNotMatch(packed.prompt, /CURRENT TASK/);
+});
+
+test('tracks contributors and collaborator advancements', () => {
+  const tab = {
+    title: 'shared', messages: [
+      { role: 'user', content: 'a' },
+      { role: 'assistant', provider: 'codex', content: 'b' },
+      { role: 'user', content: 'c' },
+      { role: 'assistant', provider: 'claude', content: 'd' },
+      { role: 'assistant', provider: 'kimi', content: 'e' }
+    ]
+  };
+  assert.deepEqual(sessionContributors(tab, 'codex'), ['codex', 'claude', 'kimi']);
+  assert.deepEqual(advancedSince(tab, 'codex'), ['claude', 'kimi']);
+  assert.deepEqual(advancedSince(tab, 'kimi'), []);
+});
+
+test('surfaces the advancement note in the built prompt', () => {
+  const tab = {
+    title: 'shared', attachedIds: [], summary: '', summaryThrough: 0, sessions: {}, messages: [
+      { role: 'assistant', provider: 'codex', content: 'first' },
+      { role: 'assistant', provider: 'claude', content: 'second' }
+    ]
+  };
+  const packed = buildPrompt({ contextBudget: 8000, privacy: {}, tabs: [tab] }, tab, 'codex', 'next');
+  assert.match(packed.prompt, /SINCE YOUR LAST TURN.*claude/);
 });
 
 test('selects older messages for rolling summarization', () => {

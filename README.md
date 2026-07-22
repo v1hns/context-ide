@@ -1,8 +1,14 @@
 # Context IDE
 
-A dependency-free terminal workspace for switching between local AI coding agents without losing shared context.
+A dependency-free terminal workspace where several AI coding agents share one continuous session and a single context window. Switch models mid-task without losing what was said.
 
-It invokes locally installed agent CLIs. Authentication and usage come from each CLI's existing subscription or local model session—there are no API keys or direct API calls in this project.
+Built-in providers invoke locally installed agent CLIs, so their authentication and usage come from each CLI's existing subscription. You can also import your own models: another CLI, or any OpenAI-compatible HTTP API (Moonshot/Kimi, DeepSeek, Groq, OpenRouter, …) authenticated with an environment variable. Imported API models are the only path that makes direct API calls; the built-ins never do.
+
+## Interface
+
+The prompt sits above a pinned status footer that stays visible while the conversation scrolls. The footer shows the shared context-window meter and every model's limit bars, so context and quotas are always in view directly below where you type. Toggle the pinned frame with `/config frame off` to fall back to a single inline status line.
+
+Pasted text behaves like Claude Code and Codex: a multi-line or long paste collapses to a `[Pasted text #1 +12 lines]` placeholder in the prompt instead of flooding the line, and expands back to the full content when you send the message.
 
 ## Requirements
 
@@ -31,7 +37,11 @@ Workspace state is stored at `~/.context-ide/workspace.json` and is never commit
 | Command | Action |
 | --- | --- |
 | `/help` | Show commands |
-| `/providers` | Show providers, availability, and setup hints |
+| `/providers` | Show every model (built-in and imported), availability, and setup hints |
+| `/models` | List imported models and the import syntax |
+| `/provider add <name> api <baseUrl> <model> [KEY_ENV]` | Import an OpenAI-compatible API model |
+| `/provider add <name> cli <command> [args… use {prompt}]` | Import another CLI as a model |
+| `/provider remove <name>` | Remove an imported model |
 | `/agent <provider>` | Switch the active task's agent |
 | `/new <title>` | Create and switch to a task |
 | `/tabs` | List task tabs |
@@ -48,7 +58,8 @@ Workspace state is stored at `~/.context-ide/workspace.json` and is never commit
 | `/usage` | Show measured calls/tokens and known remaining limits |
 | `/limit <provider> <0-100\|auto> [reset]` | Set or clear a manual remaining-limit reading |
 | `/config` | Show interface and delegation settings |
-| `/config statusbar <on\|off>` | Toggle the bottom status line |
+| `/config statusbar <on\|off>` | Toggle the status line |
+| `/config frame <on\|off>` | Toggle the pinned context/limits footer |
 | `/config delegation <on\|off>` | Toggle low-limit delegation prompts |
 | `/config ping <on\|off>` | Toggle the terminal bell for delegation |
 | `/config threshold <1-99>` | Set the low-limit percentage |
@@ -68,7 +79,11 @@ Workspace state is stored at `~/.context-ide/workspace.json` and is never commit
 | `/restart` | Save the workspace and restart Context IDE |
 | `/exit` | Save and quit |
 
-Any line that does not begin with `/` is sent to the active CLI agent. Conversation history, universal context, and attached task context are included with each turn.
+Any line that does not begin with `/` is sent to the active agent. Conversation history, universal context, and attached task context are included with each turn.
+
+## One shared session
+
+Every model in Context IDE is treated as a collaborator in a single ongoing session rather than a fresh assistant on a mission. Each turn tells the active model who else has contributed (`SHARED SESSION AGENTS: codex, claude`) and, when another model advanced the conversation since this one last spoke, names them so it builds on their work instead of restarting. The shared context window is packed the same way regardless of which model answers, so switching agents continues one conversation.
 
 ## Context handling
 
@@ -110,6 +125,8 @@ When the active provider is at or below the configured threshold—or reports an
 
 ## Providers
 
+Built-in CLI providers:
+
 | Provider | Authentication route | Command |
 | --- | --- | --- |
 | Codex | ChatGPT/Codex subscription via `codex login` | `codex` |
@@ -117,7 +134,21 @@ When the active provider is at or below the configured threshold—or reports an
 | Kimi | Kimi membership/OAuth via `kimi login` | `kimi` |
 | Gemini | Google account sign-in | `gemini` |
 | Copilot | GitHub Copilot subscription | `copilot` |
-DeepSeek is intentionally not included: it does not currently offer an official subscription-authenticated coding CLI, and Context IDE does not use local models or direct model API integrations.
+
+### Importing more models
+
+Add models at runtime and they persist in the workspace:
+
+```text
+# Any OpenAI-compatible API (key read from the environment, never stored)
+/provider add moonshot api https://api.moonshot.ai/v1 kimi-k2-0711-preview MOONSHOT_API_KEY
+/provider add deepseek api https://api.deepseek.com/v1 deepseek-chat DEEPSEEK_API_KEY
+
+# Any other CLI ({prompt} is substituted; without it the prompt is piped on stdin)
+/provider add grok cli grok -p {prompt}
+```
+
+API models make direct HTTPS calls to the base URL you supply, authenticated with the named environment variable (defaulting to `<NAME>_API_KEY`). The key is only ever sent as an `Authorization` header and is never written to the workspace. Imported models use the portable summary/recent-history context path and do not claim native provider sessions.
 
 ## Permissions
 

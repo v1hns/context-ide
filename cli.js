@@ -6,9 +6,11 @@ const os = require('node:os');
 const path = require('node:path');
 const readline = require('node:readline');
 const { spawn } = require('node:child_process');
-const { DEFAULT_BUDGET, buildPrompt, defaultPrivacy, estimateTokens, privacyFor, summaryCandidate, summaryPrompt } = require('./context');
-const { PROVIDERS, commandExists, run, runProvider } = require('./providers');
+const { DEFAULT_BUDGET, buildPrompt, defaultPrivacy, estimateTokens, privacyFor, sessionContributors, summaryCandidate, summaryPrompt } = require('./context');
+const { PasteInput, PasteStore } = require('./paste-input');
+const { PROVIDERS, buildRegistry, commandExists, providerAvailable, providerSetup, run, runProvider } = require('./providers');
 const { detectLimitError, isLow, recordLimitError, recordSuccess, refreshClaudeLimit, refreshCodexLimit, renderBar, sanitizeUsageEntry, score, setManualLimit, usageFor } = require('./usage');
+const { Footer, bar } = require('./ui');
 
 const DATA_DIR = path.join(os.homedir(), '.context-ide');
 const STATE_FILE = path.join(DATA_DIR, 'workspace.json');
@@ -20,10 +22,11 @@ const C = {
 };
 
 const defaults = () => ({
-  version: 4,
+  version: 5,
   contextBudget: DEFAULT_BUDGET,
-  settings: { statusBar: true, delegation: true, ping: true, lowThreshold: 20, barWidth: 7 },
+  settings: { statusBar: true, frame: true, delegation: true, ping: true, lowThreshold: 20, barWidth: 7 },
   usage: {},
+  customProviders: [],
   privacy: Object.fromEntries(Object.keys(PROVIDERS).map(name => [name, defaultPrivacy()])),
   universalContext: '',
   activeTabId: 'welcome',
@@ -33,7 +36,7 @@ const defaults = () => ({
 function migrate(raw) {
   const base = defaults();
   const cleanUsage = Object.fromEntries(Object.entries(raw.usage || {}).map(([provider, usage]) => [provider, sanitizeUsageEntry(usage)]));
-  const migrated = { ...base, ...raw, version: 4, settings: { ...base.settings, ...(raw.settings || {}) }, usage: cleanUsage, privacy: { ...base.privacy, ...(raw.privacy || {}) } };
+  const migrated = { ...base, ...raw, version: 5, settings: { ...base.settings, ...(raw.settings || {}) }, usage: cleanUsage, customProviders: Array.isArray(raw.customProviders) ? raw.customProviders : [], privacy: { ...base.privacy, ...(raw.privacy || {}) } };
   const legacyWelcome = raw.tabs.some(tab => tab.id === 'welcome' && tab.title === LEGACY_TITLE);
   if (legacyWelcome && migrated.universalContext === LEGACY_CONTEXT) migrated.universalContext = '';
   migrated.tabs = raw.tabs.map(tab => {
@@ -55,7 +58,16 @@ function load() {
 let state = load();
 let busy = false;
 let restarting = false;
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+let registry = buildRegistry(state.customProviders);
+function rebuildRegistry() { registry = buildRegistry(state.customProviders); }
+const pasteStore = new PasteStore();
+const pasteInput = new PasteInput({ store: pasteStore });
+process.stdin.pipe(pasteInput);
+const rl = readline.createInterface({ input: pasteInput, output: process.stdout, terminal: true });
+if (process.stdin.isTTY) process.stdout.write('\x1b[?2004h');
+const footer = new Footer(process.stdout);
+footer.onResize = () => { if (!busy) rl.prompt(true); };
+function frameOn() { return Boolean(process.stdout.isTTY) && state.settings.frame !== false; }
 
 function save() {
   fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
@@ -67,37 +79,73 @@ function activeTab() {
 }
 
 function id() { return `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`; }
-function providerColor(provider) { return provider === 'claude' ? C.violet : C.cyan; }
+const PROVIDER_COLORS = { codex: C.cyan, claude: C.violet, kimi: C.green, gemini: C.yellow, copilot: C.red };
+function providerColor(provider) { return PROVIDER_COLORS[provider] || C.cyan; }
 function promptLabel() {
   const tab = activeTab();
-  return `${providerColor(tab.provider)}${tab.provider}${C.reset} ${C.dim}[${tab.title}]${C.reset} › `;
+  return `${providerColor(tab.provider)}${C.bold}${tab.provider}${C.reset} ${C.dim}${tab.title}${C.reset} ${providerColor(tab.provider)}▸${C.reset} `;
 }
 function usedProviders() {
-  return [...new Set([...state.tabs.map(tab => tab.provider), ...Object.keys(state.usage || {})])].filter(name => PROVIDERS[name]);
+  return [...new Set([...state.tabs.map(tab => tab.provider), ...Object.keys(state.usage || {})])].filter(name => registry[name]);
 }
-function statusBar() {
-  if (!state.settings.statusBar) return;
+
+// One provider's short limit chip for the status footer / bar.
+function providerChip(name) {
+  const usage = usageFor(state, name);
+  const color = usage.status === 'unknown' ? C.dim : usage.status === 'exhausted' ? C.red : isLow(usage, state.settings.lowThreshold) ? C.yellow : C.green;
+  if (usage.status === 'exhausted') return `${color}${name} blocked${usage.resetAt ? ` until ${usage.resetAt}` : ''}${C.reset}`;
+  if (usage.remainingPercent != null) return `${color}${name} ${renderBar(usage, state.settings.barWidth)}${C.reset}`;
+  return `${color}${name} ${usage.status === 'available' ? 'ready' : 'n/a'}${C.reset}`;
+}
+
+// Fraction of the shared context budget currently held by the active task.
+function contextFill() {
+  const tab = activeTab();
+  const tokens = estimateTokens(tab.messages.map(message => message.content).join('\n'));
+  const budget = Math.max(1, Number(state.contextBudget) || DEFAULT_BUDGET);
+  return { tokens, budget, fraction: Math.min(1, tokens / budget) };
+}
+
+// The two status lines shown permanently below the prompt: a session/context
+// line, then the per-model limit chips.
+function footerLines() {
   refreshCodexLimit(state);
   refreshClaudeLimit(state);
-  const parts = usedProviders().map(name => {
-    const usage = usageFor(state, name);
-    const color = usage.status === 'unknown' ? C.dim : usage.status === 'exhausted' ? C.red : isLow(usage, state.settings.lowThreshold) ? C.yellow : C.green;
-    if (usage.status === 'exhausted') return `${color}${name}: blocked${usage.resetAt ? ` until ${usage.resetAt}` : ''}${C.reset}`;
-    if (usage.remainingPercent != null) return `${color}${name}: ${renderBar(usage, state.settings.barWidth)}${C.reset}`;
-    return `${color}${name}: ${usage.status === 'available' ? 'ready (quota not exposed)' : 'quota unavailable'}${C.reset}`;
-  });
-  if (parts.length) console.log(`${C.dim}models${C.reset}  ${parts.join('  │  ')}`);
+  const tab = activeTab();
+  const agents = sessionContributors(tab, tab.provider);
+  const fill = contextFill();
+  const pct = Math.round(fill.fraction * 100);
+  const meterColor = pct >= 85 ? C.red : pct >= 65 ? C.yellow : C.green;
+  const rule = `${C.dim}${'─'.repeat(4)} shared session · ${agents.join(' + ')} ${'─'.repeat(4)}${C.reset}`;
+  const chips = usedProviders().map(providerChip);
+  const context = `${meterColor}ctx ${bar(fill.fraction, 12)} ${pct}%${C.reset} ${C.dim}(${fill.tokens}/${fill.budget} tok)${C.reset}`;
+  const status = [context, ...chips, `${providerColor(tab.provider)}● ${tab.provider}${C.reset}`].join(`  ${C.dim}│${C.reset}  `);
+  return [rule, status];
 }
+
+// Inline status bar (used when the pinned frame is off or output is not a TTY).
+function statusBar() {
+  if (!state.settings.statusBar) return;
+  const [, status] = footerLines();
+  console.log(`${C.dim}models${C.reset}  ${status}`);
+}
+
+function renderFooter() {
+  if (frameOn()) footer.set(footerLines());
+}
+
 function prompt() {
   if (busy) return;
-  statusBar();
+  if (frameOn()) renderFooter();
+  else statusBar();
   rl.setPrompt(promptLabel());
   rl.prompt();
 }
 
 function banner() {
-  console.log(`${C.bold}Context IDE${C.reset}  ${C.dim}multi-agent subscription + local workspace${C.reset}`);
-  console.log(`${C.dim}Type /help for commands. Your workspace is saved locally.${C.reset}\n`);
+  if (frameOn()) footer.enable(2);
+  console.log(`${C.bold}Context IDE${C.reset}  ${C.dim}one shared session · many models${C.reset}`);
+  console.log(`${C.dim}Type /help for commands. Context and limits stay pinned below.${C.reset}\n`);
   status();
 }
 
@@ -160,7 +208,7 @@ async function updateSummary(tab, providerName, force = false) {
   if (!candidate) return false;
   console.log(`${C.dim}Compressing older context into a rolling summary…${C.reset}`);
   try {
-    const result = await runProvider(providerName, summaryPrompt(tab, candidate), { ephemeral: true, cwd: tab.cwd });
+    const result = await runProvider(providerName, summaryPrompt(tab, candidate), { ephemeral: true, cwd: tab.cwd, provider: registry[providerName] });
     if (!result.answer) return false;
     recordSuccess(state, providerName, result.usage);
     tab.summary = result.answer;
@@ -175,8 +223,8 @@ async function updateSummary(tab, providerName, force = false) {
 }
 
 function delegationTarget(from) {
-  return Object.keys(PROVIDERS)
-    .filter(name => name !== from && commandExists(PROVIDERS[name].command) && !isLow(usageFor(state, name), state.settings.lowThreshold))
+  return Object.keys(registry)
+    .filter(name => name !== from && providerAvailable(registry[name]) && !isLow(usageFor(state, name), state.settings.lowThreshold))
     .sort((a, b) => score(usageFor(state, b)) - score(usageFor(state, a)))[0];
 }
 
@@ -195,13 +243,13 @@ function requestDelegation(from, reason) {
 async function askAgent(text, options = {}) {
   const tab = activeTab();
   const providerName = tab.provider;
-  const provider = PROVIDERS[providerName];
+  const provider = registry[providerName];
   if (!provider) {
     console.error(`${C.red}Unknown provider: ${providerName}${C.reset}`);
     return prompt();
   }
-  if (!commandExists(provider.command)) {
-    console.error(`${C.red}${providerName} is not installed.${C.reset}\n${C.dim}${provider.setup}${C.reset}\n`);
+  if (!providerAvailable(provider)) {
+    console.error(`${C.red}${providerName} is not ready.${C.reset}\n${C.dim}${providerSetup(provider)}${C.reset}\n`);
     return prompt();
   }
   const currentUsage = usageFor(state, providerName);
@@ -225,12 +273,12 @@ async function askAgent(text, options = {}) {
     const session = nativeCapable ? tab.sessions[providerName] : undefined;
     let result;
     try {
-      result = await runProvider(providerName, packed.prompt, { sessionId: session?.id, cwd: tab.cwd });
+      result = await runProvider(providerName, packed.prompt, { sessionId: session?.id, cwd: tab.cwd, provider });
     } catch (error) {
       if (!session?.id || detectLimitError(error.message)) throw error;
       console.log(`${C.yellow}Native session unavailable; rebuilding it from portable context.${C.reset}`);
       delete tab.sessions[providerName];
-      result = await runProvider(providerName, buildPrompt(state, tab, providerName, text).prompt, { cwd: tab.cwd });
+      result = await runProvider(providerName, buildPrompt(state, tab, providerName, text).prompt, { cwd: tab.cwd, provider });
     }
     tab.messages.push({ role: 'user', content: text });
     const content = result.answer || '(No response)';
@@ -295,17 +343,79 @@ async function gitCommand(input) {
   }
 }
 
+function listCustomProviders() {
+  if (!state.customProviders.length) {
+    console.log(`${C.dim}No imported models yet. Add one with /provider add …${C.reset}`);
+  } else {
+    state.customProviders.forEach(def => {
+      const detail = def.type === 'openai' ? `api ${def.model} @ ${def.baseUrl} (key ${def.apiKeyEnv})` : `cli ${def.command} ${(def.args || []).join(' ')}`;
+      const ready = providerAvailable(registry[def.name]);
+      console.log(`${ready ? C.green + '●' : C.yellow + '○'}${C.reset} ${def.name.padEnd(12)} ${C.dim}${detail}${C.reset}`);
+    });
+  }
+  console.log(`${C.dim}Import:  /provider add <name> api <baseUrl> <model> <KEY_ENV>${C.reset}`);
+  console.log(`${C.dim}         /provider add <name> cli <command> [args… use {prompt}]${C.reset}`);
+  console.log(`${C.dim}Remove:  /provider remove <name>${C.reset}`);
+}
+
+function providerCommand(rest) {
+  const parts = rest.split(/\s+/).filter(Boolean);
+  const [action, name, kind, ...spec] = parts;
+  if (!action || action === 'list') return listCustomProviders();
+  if (action === 'remove' || action === 'rm') {
+    const before = state.customProviders.length;
+    state.customProviders = state.customProviders.filter(def => def.name !== name);
+    if (state.customProviders.length === before) { console.log(`${C.yellow}No imported model named ${name}.${C.reset}`); return; }
+    rebuildRegistry();
+    if (state.privacy) delete state.privacy[name];
+    let reassigned = false;
+    for (const other of state.tabs) {
+      if (other.provider === name) { other.provider = 'codex'; delete other.sessions?.[name]; reassigned = true; }
+    }
+    save();
+    console.log(`${C.green}Removed imported model ${name}.${C.reset}${reassigned ? ` ${C.dim}Tasks using it switched to codex.${C.reset}` : ''}`);
+    return;
+  }
+  if (action !== 'add') { console.log(`${C.yellow}Usage: /provider add|remove|list …${C.reset}`); return; }
+  if (!name || !/^[a-z][a-z0-9_-]*$/i.test(name)) { console.log(`${C.yellow}Choose a simple model name (letters, digits, - or _).${C.reset}`); return; }
+  if (PROVIDERS[name]) { console.log(`${C.yellow}${name} is a built-in provider; pick another name.${C.reset}`); return; }
+  let def;
+  if (kind === 'api' || kind === 'openai') {
+    const [baseUrl, model, apiKeyEnv] = spec;
+    if (!baseUrl || !model) { console.log(`${C.yellow}Usage: /provider add <name> api <baseUrl> <model> [KEY_ENV]${C.reset}`); return; }
+    def = { name, type: 'openai', baseUrl, model, apiKeyEnv: apiKeyEnv || `${name.toUpperCase()}_API_KEY` };
+  } else if (kind === 'cli') {
+    const [command, ...args] = spec;
+    if (!command) { console.log(`${C.yellow}Usage: /provider add <name> cli <command> [args… use {prompt}]${C.reset}`); return; }
+    def = { name, type: 'cli', command, args: args.length ? args : ['-p', '{prompt}'] };
+  } else {
+    console.log(`${C.yellow}Choose a kind: api or cli.${C.reset}`);
+    return;
+  }
+  state.customProviders = [...state.customProviders.filter(existing => existing.name !== name), def];
+  rebuildRegistry();
+  save();
+  console.log(`${C.green}Imported model ${name}.${C.reset} ${C.dim}Switch to it with /agent ${name}.${C.reset}`);
+  if (!providerAvailable(registry[name])) console.log(`${C.yellow}Not ready yet: ${providerSetup(registry[name])}${C.reset}`);
+}
+
 function help() {
   console.log(`
 ${C.bold}Conversation${C.reset}
-  /agent <provider>     switch the active task's CLI agent
-  /providers            show providers, availability, and setup
+  /agent <provider>     switch the active task's agent
+  /providers            show every model, availability, and setup
   /usage                show measured usage and known limits
   /limit <provider> <0-100|auto> [reset time]
   /config               show customizable interface settings
-  /config statusbar|delegation|ping <on|off>
+  /config statusbar|frame|delegation|ping <on|off>
   /config threshold <1-99>
   /config barwidth <4-20>
+
+${C.bold}Models${C.reset}
+  /models               list imported models and import syntax
+  /provider add <name> api <baseUrl> <model> [KEY_ENV]
+  /provider add <name> cli <command> [args… use {prompt}]
+  /provider remove <name>   remove an imported model
   /budget [tokens]      show or set the prompt context budget
   /summary              show the rolling summary
   /summary now          summarize older context now
@@ -353,15 +463,18 @@ function command(line) {
     case 'status': status(); break;
     case 'tabs': listTabs(); break;
     case 'providers':
-      Object.entries(PROVIDERS).forEach(([key, provider]) => {
-        const ready = commandExists(provider.command);
-        console.log(`${ready ? C.green + '● ready' : C.yellow + '○ setup'}${C.reset}  ${key.padEnd(9)} ${C.dim}${ready ? provider.command : provider.setup}${C.reset}`);
+      Object.entries(registry).forEach(([key, provider]) => {
+        const ready = providerAvailable(provider);
+        const kind = provider.custom ? (provider.type === 'openai' ? `api ${provider.model}` : `cli ${provider.command}`) : provider.command;
+        console.log(`${ready ? C.green + '● ready' : C.yellow + '○ setup'}${C.reset}  ${key.padEnd(9)} ${provider.custom ? C.cyan + 'custom ' + C.reset : ''}${C.dim}${ready ? kind : providerSetup(provider)}${C.reset}`);
       });
       break;
+    case 'provider': providerCommand(rest); break;
+    case 'models': providerCommand(rest || 'list'); break;
     case 'usage': usageStatus(); break;
     case 'limit': {
       const [providerName, value, ...resetWords] = rest.split(/\s+/);
-      if (!PROVIDERS[providerName] || !value) {
+      if (!registry[providerName] || !value) {
         console.log(`${C.yellow}Usage: /limit <provider> <0-100|auto> [reset time]${C.reset}`);
       } else if (value === 'auto') {
         setManualLimit(state, providerName, null); save(); usageStatus();
@@ -375,11 +488,14 @@ function command(line) {
     case 'config': {
       if (!rest) { configStatus(); break; }
       const [key, value] = rest.split(/\s+/);
-      const booleanKeys = { statusbar: 'statusBar', delegation: 'delegation', ping: 'ping' };
-      if (booleanKeys[key] && ['on', 'off'].includes(value)) state.settings[booleanKeys[key]] = value === 'on';
+      const booleanKeys = { statusbar: 'statusBar', frame: 'frame', delegation: 'delegation', ping: 'ping' };
+      if (booleanKeys[key] && ['on', 'off'].includes(value)) {
+        state.settings[booleanKeys[key]] = value === 'on';
+        if (key === 'frame') { if (frameOn()) footer.enable(2); else footer.disable(); }
+      }
       else if (key === 'threshold' && Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 99) state.settings.lowThreshold = Number(value);
       else if (key === 'barwidth' && Number.isInteger(Number(value)) && Number(value) >= 4 && Number(value) <= 20) state.settings.barWidth = Number(value);
-      else { console.log(`${C.yellow}Usage: /config statusbar|delegation|ping on|off, /config threshold 1-99, or /config barwidth 4-20${C.reset}`); break; }
+      else { console.log(`${C.yellow}Usage: /config statusbar|frame|delegation|ping on|off, /config threshold 1-99, or /config barwidth 4-20${C.reset}`); break; }
       save(); configStatus(); break;
     }
     case 'budget': {
@@ -394,8 +510,8 @@ function command(line) {
     case 'privacy': {
       if (!rest) { privacyStatus(); break; }
       const [providerName, field, setting] = rest.split(/\s+/);
-      if (providerName && !field) { PROVIDERS[providerName] ? privacyStatus(providerName) : console.log(`${C.yellow}Unknown provider.${C.reset}`); break; }
-      if (!PROVIDERS[providerName] || !['universal', 'attached', 'history', 'native'].includes(field) || !['on', 'off'].includes(setting)) {
+      if (providerName && !field) { registry[providerName] ? privacyStatus(providerName) : console.log(`${C.yellow}Unknown provider.${C.reset}`); break; }
+      if (!registry[providerName] || !['universal', 'attached', 'history', 'native'].includes(field) || !['on', 'off'].includes(setting)) {
         console.log(`${C.yellow}Usage: /privacy <provider> <universal|attached|history|native> <on|off>${C.reset}`);
       } else {
         state.privacy[providerName] = { ...privacyFor(state, providerName), [field]: setting === 'on' };
@@ -407,7 +523,7 @@ function command(line) {
     case 'sessions': {
       const [action, providerName] = rest.split(/\s+/);
       if (!rest) sessionsStatus(tab);
-      else if (action === 'reset' && (!providerName || PROVIDERS[providerName])) {
+      else if (action === 'reset' && (!providerName || registry[providerName])) {
         if (providerName) delete tab.sessions[providerName]; else tab.sessions = {};
         save(); console.log(`${C.green}Native session state reset.${C.reset}`);
       } else console.log(`${C.yellow}Usage: /sessions or /sessions reset [provider]${C.reset}`);
@@ -423,7 +539,7 @@ function command(line) {
       break;
     case 'git': gitCommand(rest); return;
     case 'agent':
-      if (!PROVIDERS[rest]) console.log(`${C.yellow}Choose: ${Object.keys(PROVIDERS).join(', ')}${C.reset}`);
+      if (!registry[rest]) console.log(`${C.yellow}Choose: ${Object.keys(registry).join(', ')}${C.reset}`);
       else { tab.provider = rest; save(); status(); }
       break;
     case 'new': {
@@ -478,13 +594,20 @@ function command(line) {
 }
 
 rl.on('line', line => {
-  const text = line.trim();
+  const { text: raw, expanded } = pasteStore.expand(line);
+  const text = raw.trim();
   if (!text) return prompt();
+  if (expanded.length) {
+    const total = expanded.reduce((sum, item) => sum + item.lines, 0);
+    console.log(`${C.dim}⌷ expanded ${expanded.length} pasted block${expanded.length > 1 ? 's' : ''} (${total} lines)${C.reset}`);
+  }
   if (text.startsWith('/')) command(text);
   else askAgent(text);
 });
 rl.on('SIGINT', () => { console.log('\n'); save(); rl.close(); });
 rl.on('close', () => {
+  footer.disable();
+  if (process.stdin.isTTY) process.stdout.write('\x1b[?2004l');
   if (restarting) {
     console.log(`${C.dim}Restarting Context IDE…${C.reset}`);
     const child = spawn(process.execPath, [__filename], { cwd: process.cwd(), env: process.env, stdio: 'inherit' });
