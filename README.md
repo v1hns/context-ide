@@ -6,7 +6,16 @@ Built-in providers invoke locally installed agent CLIs, so their authentication 
 
 ## Interface
 
-The prompt sits above a pinned status dock that stays fixed at the bottom of the terminal while the conversation scrolls above it. The dock shows the shared context-window meter and every model's limit bars, so context and quotas are always in view directly below where you type — and it never redraws or stacks per message. Toggle the pinned dock with `/config frame off` to fall back to a single inline status line.
+Like Claude Code and Codex, you type into a **bordered input box pinned to the bottom of the terminal**, and the conversation scrolls in the region above it. The box never moves or restacks. Its top border shows the active model and task, and the line just below it is the shared context-window meter plus every model's limit bars, so context and quotas are always in view:
+
+```text
+╭─ claude · General ───────────────────────────────╮
+│ › describe the retry logic                        │
+╰───────────────────────────────────────────────────╯
+ ctx ████░░░░░░░░ 31% (7.4k/24k tok)  ·  codex 10%  ·  claude 22%  ·  2 agents
+```
+
+The box supports the usual line editing (arrows, Home/End, Ctrl-A/E/U/W, word delete) and recalls previous inputs with the up arrow. Each answer ends with a recap like `✻ cogitated for 4s · context ~5.2k/24k tokens`. Toggle the box off with `/config frame off` (then `/restart`) to fall back to a plain readline prompt with a single inline status line; non-interactive use (pipes, redirects) uses the plain prompt automatically.
 
 Every launch starts a **fresh session** with clean context, so a new conversation is never blended into whatever you were doing before. The previous transcript is archived to `~/.context-ide/history/` rather than discarded, and your config, tabs, imported models, and universal context are kept. A `/restart` (a code reload) resumes the in-progress conversation instead of clearing it. Turn the behavior off with `/config fresh off` to resume the last conversation on every launch.
 
@@ -61,7 +70,7 @@ Workspace state is stored at `~/.context-ide/workspace.json` and is never commit
 | `/limit <provider> <0-100\|auto> [reset]` | Set or clear a manual remaining-limit reading |
 | `/config` | Show interface and delegation settings |
 | `/config statusbar <on\|off>` | Toggle the status line |
-| `/config frame <on\|off>` | Toggle the pinned context/limits dock |
+| `/config frame <on\|off>` | Toggle the pinned input box (takes effect on `/restart`) |
 | `/config fresh <on\|off>` | Start each launch fresh (on) or resume the last conversation (off) |
 | `/config delegation <on\|off>` | Toggle low-limit delegation prompts |
 | `/config ping <on\|off>` | Toggle the terminal bell for delegation |
@@ -111,10 +120,10 @@ The token count is an offline estimate rather than a provider tokenizer result, 
 
 ## Limits and delegation
 
-The line above the prompt shows every provider currently used by a task or recorded in workspace usage:
+The status line under the input box shows every provider currently used by a task or recorded in workspace usage:
 
 ```text
-models  codex: [█░░░░░░] 10% used  │  claude: [██░░░░░] 22% used
+ ctx ████░░░░░░░░ 31% (7.4k/24k tok)  ·  codex [█░░░░░░] 10%  ·  claude [██░░░░░] 22%  ·  2 agents
 ```
 
 Context IDE displays the used percentage for the tightest real quota window for Codex and Claude; `/usage` shows each available window separately. Codex limits come from local Codex rate-limit session events. Claude limits come from Anthropic's quota-only OAuth usage endpoint using the existing Claude Code credential in macOS Keychain. The credential is read in a short-lived helper, used only as an authorization header, and is never printed or stored by Context IDE. Results are cached for three minutes. Other unmeasurable providers say `quota unavailable`. Limits are never estimated from unrelated token counts. Detailed call and token telemetry stays in `/usage`. You can override a reading manually and later return to automatic detection:

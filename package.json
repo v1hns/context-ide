@@ -7,7 +7,7 @@
   },
   "scripts": {
     "start": "node cli.js",
-    "check": "node --check cli.js && node --check context.js && node --check providers.js && node --check usage.js && node --check claude-quota.js && node --check paste-input.js && node --check ui.js",
+    "check": "node --check cli.js && node --check context.js && node --check providers.js && node --check usage.js && node --check claude-quota.js && node --check paste-input.js && node --check ui.js && node --check prompt-box.js",
     "test": "node --test"
   }
 }

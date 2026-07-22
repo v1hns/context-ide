@@ -10,7 +10,8 @@ const { DEFAULT_BUDGET, buildPrompt, defaultPrivacy, estimateTokens, privacyFor,
 const { PasteInput, PasteStore } = require('./paste-input');
 const { PROVIDERS, buildRegistry, commandExists, providerAvailable, providerSetup, run, runProvider } = require('./providers');
 const { detectLimitError, isLow, recordLimitError, recordSuccess, refreshClaudeLimit, refreshCodexLimit, renderBar, sanitizeUsageEntry, score, setManualLimit, usageFor } = require('./usage');
-const { Footer, bar, visibleLength } = require('./ui');
+const { bar } = require('./ui');
+const { PromptBox } = require('./prompt-box');
 
 const DATA_DIR = path.join(os.homedir(), '.context-ide');
 const STATE_FILE = path.join(DATA_DIR, 'workspace.json');
@@ -62,13 +63,17 @@ let restarting = false;
 let registry = buildRegistry(state.customProviders);
 function rebuildRegistry() { registry = buildRegistry(state.customProviders); }
 const pasteStore = new PasteStore();
-const pasteInput = new PasteInput({ store: pasteStore });
-process.stdin.pipe(pasteInput);
-const rl = readline.createInterface({ input: pasteInput, output: process.stdout, terminal: true });
-if (process.stdin.isTTY) process.stdout.write('\x1b[?2004h');
-const footer = new Footer(process.stdout);
-footer.onResize = () => { if (!busy) rl.prompt(true); };
-function frameOn() { return Boolean(process.stdout.isTTY) && state.settings.frame !== false; }
+// A real TTY gets the pinned input box; pipes/redirects fall back to readline.
+const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY) && state.settings.frame !== false;
+let rl;
+if (interactive) {
+  rl = new PromptBox({ store: pasteStore, statusHeight: 1 });
+} else {
+  const pasteInput = new PasteInput({ store: pasteStore });
+  process.stdin.pipe(pasteInput);
+  rl = readline.createInterface({ input: pasteInput, output: process.stdout, terminal: Boolean(process.stdout.isTTY) });
+  if (process.stdin.isTTY) process.stdout.write('\x1b[?2004h');
+}
 
 function save() {
   fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
@@ -111,11 +116,8 @@ function activeTab() {
 function id() { return `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`; }
 const PROVIDER_COLORS = { codex: C.cyan, claude: C.violet, kimi: C.green, gemini: C.yellow, copilot: C.red };
 function providerColor(provider) { return PROVIDER_COLORS[provider] || C.cyan; }
-function frameWidth() { return Math.max(24, Math.min(120, process.stdout.columns || 80)); }
-
-// A clean single-line prompt. It is intentionally not a box: a box redrawn
-// every turn stacks up in the scrollback. The stable framing lives entirely in
-// the pinned footer, which never moves.
+// Prompt label for the readline fallback (the box shows provider/task in its
+// top border instead).
 function promptLabel() {
   const tab = activeTab();
   const color = providerColor(tab.provider);
@@ -142,9 +144,9 @@ function contextFill() {
   return { tokens, budget, fraction: Math.min(1, tokens / budget) };
 }
 
-// The two status lines shown permanently below the prompt: a session/context
-// line, then the per-model limit chips.
-function footerLines() {
+// The single status line under the input box: shared context meter, each
+// model's limit chips, and how many agents share the session.
+function statusText() {
   refreshCodexLimit(state);
   refreshClaudeLimit(state);
   const tab = activeTab();
@@ -154,36 +156,33 @@ function footerLines() {
   const meterColor = pct >= 85 ? C.red : pct >= 65 ? C.yellow : C.green;
   const chips = usedProviders().map(providerChip);
   const context = `${meterColor}ctx ${bar(fill.fraction, 12)} ${pct}%${C.reset} ${C.dim}(${fill.tokens}/${fill.budget} tok)${C.reset}`;
-  const status = [context, ...chips, `${C.dim}${agents.length} agent${agents.length === 1 ? '' : 's'}${C.reset}`].join(`  ${C.dim}│${C.reset}  `);
-  // A stable pinned dock: a rule that separates the conversation from the
-  // permanent context/limit bars. Neither line ever scrolls or restacks.
-  const rule = `${C.dim}${'─'.repeat(frameWidth())}${C.reset}`;
-  return [rule, ` ${status}`];
+  return [context, ...chips, `${C.dim}${agents.length} agent${agents.length === 1 ? '' : 's'}${C.reset}`].join(`  ${C.dim}·${C.reset}  `);
 }
 
-// Inline status bar (used when the pinned frame is off or output is not a TTY).
+// Inline status bar (used when the input box is off or output is not a TTY).
 function statusBar() {
   if (!state.settings.statusBar) return;
-  const [, status] = footerLines();
-  console.log(`${C.dim}models${C.reset}  ${status}`);
-}
-
-function renderFooter() {
-  if (frameOn()) footer.set(footerLines());
+  console.log(`${C.dim}models${C.reset}  ${statusText()}`);
 }
 
 function prompt() {
   if (busy) return;
-  if (frameOn()) renderFooter();
-  else statusBar();
-  rl.setPrompt(promptLabel());
+  if (interactive) {
+    const tab = activeTab();
+    rl.setTitle(`${tab.provider} · ${tab.title}`, providerColor(tab.provider));
+    rl.setPrompt(`${providerColor(tab.provider)}›${C.reset} `);
+    rl.setStatus([` ${statusText()}`]);
+  } else {
+    statusBar();
+    rl.setPrompt(promptLabel());
+  }
   rl.prompt();
 }
 
 function banner() {
-  if (frameOn()) footer.enable(2);
+  if (interactive) rl.start();
   console.log(`${C.bold}Context IDE${C.reset}  ${C.dim}one shared session · many models${C.reset}`);
-  console.log(`${C.dim}Type /help for commands. Context and limits stay pinned below.${C.reset}\n`);
+  console.log(`${C.dim}Type /help for commands. Type in the box below; context and limits stay pinned.${C.reset}\n`);
   status();
 }
 
@@ -301,7 +300,8 @@ async function askAgent(text, options = {}) {
   }
   busy = true;
   rl.pause();
-  console.log(`${C.dim}${providerName} is working…${C.reset}`);
+  console.log(`${C.dim}✻ ${providerName} is cogitating…${C.reset}`);
+  const startedAt = Date.now();
   let limitFailure;
   try {
     await updateSummary(tab, providerName);
@@ -325,8 +325,9 @@ async function askAgent(text, options = {}) {
       tab.sessions[providerName] = { id: result.sessionId, syncedThrough: tab.messages.length, updatedAt: new Date().toISOString() };
     }
     recordSuccess(state, providerName, result.usage);
+    const elapsed = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
     console.log(`\n${providerColor(providerName)}${C.bold}${providerName}${C.reset}\n${content}\n`);
-    console.log(`${C.dim}Context: ~${packed.estimatedTokens}/${packed.budget} tokens${nativeCapable ? ' · native session on' : ''}${C.reset}`);
+    console.log(`${C.dim}✻ cogitated for ${elapsed}s · context ~${packed.estimatedTokens}/${packed.budget} tokens${nativeCapable ? ' · native session on' : ''}${C.reset}`);
   } catch (error) {
     limitFailure = recordLimitError(state, providerName, error.message);
     console.error(`${C.red}Could not run ${providerName}: ${error.message}${C.reset}\n`);
@@ -529,7 +530,7 @@ function command(line) {
       const booleanKeys = { statusbar: 'statusBar', frame: 'frame', fresh: 'freshSessions', delegation: 'delegation', ping: 'ping' };
       if (booleanKeys[key] && ['on', 'off'].includes(value)) {
         state.settings[booleanKeys[key]] = value === 'on';
-        if (key === 'frame') { if (frameOn()) footer.enable(2); else footer.disable(); }
+        if (key === 'frame') console.log(`${C.dim}The input box changes on the next launch. Use /restart to apply now.${C.reset}`);
       }
       else if (key === 'threshold' && Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 99) state.settings.lowThreshold = Number(value);
       else if (key === 'barwidth' && Number.isInteger(Number(value)) && Number(value) >= 4 && Number(value) <= 20) state.settings.barWidth = Number(value);
@@ -644,8 +645,7 @@ rl.on('line', line => {
 });
 rl.on('SIGINT', () => { console.log('\n'); save(); rl.close(); });
 rl.on('close', () => {
-  footer.disable();
-  if (process.stdin.isTTY) process.stdout.write('\x1b[?2004l');
+  if (!interactive && process.stdin.isTTY) process.stdout.write('\x1b[?2004l');
   if (restarting) {
     console.log(`${C.dim}Restarting Context IDE…${C.reset}`);
     const child = spawn(process.execPath, [__filename, '--resume'], { cwd: process.cwd(), env: process.env, stdio: 'inherit' });
