@@ -166,9 +166,10 @@ async function runProvider(name, prompt, options = {}) {
   }
 
   if (type === 'codex' || name === 'codex') {
+    // A resume keeps the session's original model; a fresh exec honors --model.
     const args = options.sessionId && !options.ephemeral
       ? ['exec', 'resume', '--json', '--skip-git-repo-check', options.sessionId, '-']
-      : ['exec', '--json', '--skip-git-repo-check', ...(options.ephemeral ? ['--ephemeral'] : []), '-'];
+      : ['exec', '--json', '--skip-git-repo-check', ...(options.model ? ['--model', options.model] : []), ...(options.ephemeral ? ['--ephemeral'] : []), '-'];
     const result = await run('codex', args, prompt, cwd);
     return parseCodexJson(result.stdout);
   }
@@ -178,8 +179,9 @@ async function runProvider(name, prompt, options = {}) {
     const sessionArgs = options.ephemeral
       ? ['--no-session-persistence']
       : options.sessionId ? ['--resume', options.sessionId] : ['--session-id', newId];
+    const modelArgs = options.model ? ['--model', options.model] : [];
     try {
-      const result = await run('claude', ['--print', '--output-format', 'json', ...sessionArgs], prompt, cwd);
+      const result = await run('claude', ['--print', '--output-format', 'json', ...modelArgs, ...sessionArgs], prompt, cwd);
       try {
         const parsed = parseClaudeOutput(result.stdout);
         return { ...parsed, sessionId: parsed.sessionId || options.sessionId || newId };

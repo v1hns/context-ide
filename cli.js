@@ -30,6 +30,7 @@ const defaults = () => ({
   settings: { statusBar: true, frame: true, freshSessions: true, delegation: true, ping: true, lowThreshold: 20, barWidth: 7 },
   usage: {},
   customProviders: [],
+  models: {},
   privacy: Object.fromEntries(Object.keys(PROVIDERS).map(name => [name, defaultPrivacy()])),
   universalContext: '',
   activeTabId: 'welcome',
@@ -39,7 +40,7 @@ const defaults = () => ({
 function migrate(raw) {
   const base = defaults();
   const cleanUsage = Object.fromEntries(Object.entries(raw.usage || {}).map(([provider, usage]) => [provider, sanitizeUsageEntry(usage)]));
-  const migrated = { ...base, ...raw, version: 5, settings: { ...base.settings, ...(raw.settings || {}) }, usage: cleanUsage, customProviders: Array.isArray(raw.customProviders) ? raw.customProviders : [], privacy: { ...base.privacy, ...(raw.privacy || {}) } };
+  const migrated = { ...base, ...raw, version: 5, settings: { ...base.settings, ...(raw.settings || {}) }, usage: cleanUsage, customProviders: Array.isArray(raw.customProviders) ? raw.customProviders : [], models: { ...(raw.models || {}) }, privacy: { ...base.privacy, ...(raw.privacy || {}) } };
   // Lift workspaces still pinned to the old 24k default up to the new default.
   if (raw.contextBudget === 24000) migrated.contextBudget = DEFAULT_BUDGET;
   const legacyWelcome = raw.tabs.some(tab => tab.id === 'welcome' && tab.title === LEGACY_TITLE);
@@ -114,6 +115,11 @@ function startFreshSession() {
 
 function activeTab() {
   return state.tabs.find(tab => tab.id === state.activeTabId) || state.tabs[0];
+}
+
+// The CLI model override for a provider, if the user set one via /model.
+function modelFor(name) {
+  return state.models?.[name] || undefined;
 }
 
 function id() { return `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`; }
@@ -248,7 +254,7 @@ async function updateSummary(tab, providerName, force = false) {
   if (!candidate) return false;
   console.log(`${C.dim}Compressing older context into a rolling summary…${C.reset}`);
   try {
-    const result = await runProvider(providerName, summaryPrompt(tab, candidate), { ephemeral: true, cwd: tab.cwd, provider: registry[providerName] });
+    const result = await runProvider(providerName, summaryPrompt(tab, candidate), { ephemeral: true, cwd: tab.cwd, provider: registry[providerName], model: modelFor(providerName) });
     if (!result.answer) return false;
     recordSuccess(state, providerName, result.usage);
     tab.summary = result.answer;
@@ -314,12 +320,12 @@ async function askAgent(text, options = {}) {
     const session = nativeCapable ? tab.sessions[providerName] : undefined;
     let result;
     try {
-      result = await runProvider(providerName, packed.prompt, { sessionId: session?.id, cwd: tab.cwd, provider });
+      result = await runProvider(providerName, packed.prompt, { sessionId: session?.id, cwd: tab.cwd, provider, model: modelFor(providerName) });
     } catch (error) {
       if (!session?.id || detectLimitError(error.message)) throw error;
       console.log(`${C.yellow}Native session unavailable; rebuilding it from portable context.${C.reset}`);
       delete tab.sessions[providerName];
-      result = await runProvider(providerName, buildPrompt(state, tab, providerName, text).prompt, { cwd: tab.cwd, provider });
+      result = await runProvider(providerName, buildPrompt(state, tab, providerName, text).prompt, { cwd: tab.cwd, provider, model: modelFor(providerName) });
     }
     tab.messages.push({ role: 'user', content: text });
     const content = result.answer || '(No response)';
@@ -441,6 +447,39 @@ function providerCommand(rest) {
   if (!providerAvailable(registry[name])) console.log(`${C.yellow}Not ready yet: ${providerSetup(registry[name])}${C.reset}`);
 }
 
+function modelCommand(rest) {
+  const [name, ...valueParts] = rest.split(/\s+/).filter(Boolean);
+  const value = valueParts.join(' ');
+  if (!name) {
+    console.log(`${C.bold}Models${C.reset}`);
+    ['codex', 'claude'].forEach(p => console.log(`  ${providerColor(p)}${p.padEnd(8)}${C.reset} ${state.models[p] || `${C.dim}CLI default${C.reset}`}`));
+    state.customProviders.filter(def => def.type === 'openai').forEach(def => console.log(`  ${providerColor(def.name)}${def.name.padEnd(8)}${C.reset} ${def.model} ${C.dim}(api)${C.reset}`));
+    console.log(`${C.dim}Set:    /model <provider> <model>      Reset: /model <provider> default${C.reset}`);
+    console.log(`${C.dim}e.g.    /model claude sonnet     /model codex gpt-5-codex${C.reset}`);
+    return;
+  }
+  if (!registry[name]) { console.log(`${C.yellow}Unknown provider: ${name}. See /providers.${C.reset}`); return; }
+  const provider = registry[name];
+  if (provider.type === 'openai') {
+    if (!value) { console.log(`${C.bold}${name}${C.reset} ${provider.model} ${C.dim}(api)${C.reset}`); return; }
+    state.customProviders = state.customProviders.map(def => def.name === name ? { ...def, model: value } : def);
+    rebuildRegistry(); save();
+    console.log(`${C.green}${name} model set to ${value}.${C.reset}`);
+    return;
+  }
+  if (name !== 'codex' && name !== 'claude') {
+    console.log(`${C.yellow}${name} runs a CLI whose model isn't switchable from here.${C.reset}`);
+    return;
+  }
+  if (!value) { console.log(`${C.bold}${name}${C.reset} ${state.models[name] || 'CLI default'}`); return; }
+  if (value === 'default' || value === 'auto') delete state.models[name];
+  else state.models[name] = value;
+  // A model change invalidates any native session pinned to the old model.
+  state.tabs.forEach(other => { if (other.sessions) delete other.sessions[name]; });
+  save();
+  console.log(`${C.green}${name} model: ${state.models[name] || 'CLI default'}.${C.reset}`);
+}
+
 function help() {
   console.log(`
 ${C.bold}Conversation${C.reset}
@@ -454,6 +493,9 @@ ${C.bold}Conversation${C.reset}
   /config barwidth <4-20>
 
 ${C.bold}Models${C.reset}
+  /model                show codex/claude models
+  /model <provider> <model>   set the CLI model (e.g. /model claude sonnet)
+  /model <provider> default   use the CLI's own default model
   /models               list imported models and import syntax
   /provider add <name> api <baseUrl> <model> [KEY_ENV]
   /provider add <name> cli <command> [args… use {prompt}]
@@ -513,6 +555,7 @@ function command(line) {
       break;
     case 'provider': providerCommand(rest); break;
     case 'models': providerCommand(rest || 'list'); break;
+    case 'model': modelCommand(rest); break;
     case 'usage': usageStatus(); break;
     case 'limit': {
       const [providerName, value, ...resetWords] = rest.split(/\s+/);

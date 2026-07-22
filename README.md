@@ -49,6 +49,9 @@ Workspace state is stored at `~/.context-ide/workspace.json` and is never commit
 | --- | --- |
 | `/help` | Show commands |
 | `/providers` | Show every model (built-in and imported), availability, and setup hints |
+| `/model` | Show the codex/claude CLI models in use |
+| `/model <provider> <model>` | Set the CLI model (e.g. `/model claude sonnet`, `/model codex gpt-5-codex`) |
+| `/model <provider> default` | Revert to the CLI's own default model |
 | `/models` | List imported models and the import syntax |
 | `/provider add <name> api <baseUrl> <model> [KEY_ENV]` | Import an OpenAI-compatible API model |
 | `/provider add <name> cli <command> [args… use {prompt}]` | Import another CLI as a model |
@@ -146,6 +149,19 @@ Built-in CLI providers:
 | Kimi | Kimi membership/OAuth via `kimi login` | `kimi` |
 | Gemini | Google account sign-in | `gemini` |
 | Copilot | GitHub Copilot subscription | `copilot` |
+
+### Choosing a model for a built-in CLI
+
+Codex and Claude both accept a model override, passed straight through to their CLI's `--model` flag:
+
+```text
+/model claude sonnet
+/model codex gpt-5-codex
+/model            # show current choices
+/model claude default   # back to the CLI default
+```
+
+Changing a model forgets that provider's native session for every task (so the next turn starts on the new model), and applies to normal turns and rolling summaries alike. For an imported OpenAI-compatible model, `/model <name> <model-id>` updates its model in place.
 
 ### Importing more models
 
