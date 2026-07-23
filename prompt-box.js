@@ -101,6 +101,14 @@ class PromptBox extends EventEmitter {
   setTitle(text, color) { this.titleText = text || ''; this._titleColor = color || C.dim; }
   setStatus(lines) { this.statusLines = Array.isArray(lines) ? lines : [lines]; if (this.started) this._render(); }
 
+  // Overwrite the status row directly, even while paused (used for the live
+  // "cogitating" spinner during a turn). Leaves the input cursor untouched.
+  setBusyLine(text) {
+    if (!this.started) return;
+    const g = this._geometry();
+    this._origOut('\x1b7' + csi(`${g.statusRow};1H`) + csi('2K') + clipVisible(text, g.cols) + '\x1b8');
+  }
+
   prompt() { if (this.started) this._render(); }
 
   question(query, callback) {
