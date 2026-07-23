@@ -77,6 +77,24 @@ test('up arrow recalls the previous submitted line', () => {
   assert.equal(box.buffer, 'first');
 });
 
+test('stays editable while busy but cedes the status row to the spinner', () => {
+  const writes = [];
+  const input = { setRawMode() {}, resume() {}, setEncoding() {}, on() {}, off() {} };
+  const output = { isTTY: true, rows: 24, columns: 80, write(s) { writes.push(String(s)); return true; }, on() {}, off() {} };
+  const { PromptBox } = require('../prompt-box');
+  const box = new PromptBox({ input, output });
+  box.start();
+  box.setStatus(['CTX-BAR']);
+  box.pause(); // a turn is running
+  writes.length = 0;
+  box._feed('typed while busy');
+  const out = writes.join('');
+  assert.equal(box.buffer, 'typed while busy', 'keystrokes still register');
+  assert.ok(out.includes('typed while busy'), 'input renders while busy');
+  assert.ok(!out.includes('CTX-BAR'), 'status row is left to the spinner while busy');
+  box.close();
+});
+
 test('resize clears the screen and repaints buffered output', () => {
   const writes = [];
   const input = { setRawMode() {}, resume() {}, setEncoding() {}, on() {}, off() {} };
