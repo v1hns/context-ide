@@ -160,9 +160,15 @@ function contextFill() {
 
 // The single status line under the input box: shared context meter, each
 // model's limit chips, and how many agents share the session.
+// Repaint the pinned status line when a background limit refresh lands.
+function scheduleStatusRefresh() {
+  if (busy || !interactive) return;
+  rl.setStatus([` ${statusText()}`]);
+}
+
 function statusText() {
   refreshCodexLimit(state);
-  refreshClaudeLimit(state);
+  refreshClaudeLimit(state, scheduleStatusRefresh);
   const tab = activeTab();
   const agents = sessionContributors(tab, tab.provider);
   const fill = contextFill();
