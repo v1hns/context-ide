@@ -206,6 +206,27 @@ class PromptBox extends EventEmitter {
     this._origOut(out);
   }
 
+  // Redraw ONLY the input row. Called on every keystroke — the borders and
+  // status don't change while typing, so repainting them (≈960 bytes) per key
+  // is what made typing lag. This writes ≈1 line instead.
+  _renderInput() {
+    if (!this.started) return;
+    const g = this._geometry();
+    const width = g.cols;
+    const gutter = `${C.dim}│${C.reset} ${this.promptText}`;
+    const gutterWidth = visibleLength(gutter);
+    const textWidth = Math.max(1, width - gutterWidth - 2);
+    let offset = 0;
+    if (this.cursor > textWidth) offset = this.cursor - textWidth;
+    const shown = this.buffer.slice(offset, offset + textWidth);
+    const cursorCol = gutterWidth + 1 + (this.cursor - offset);
+    this._origOut(
+      csi(`${g.inputRow};1H`) + csi('2K') + gutter + shown +
+      csi(`${g.inputRow};${width}H`) + `${C.dim}│${C.reset}` +
+      csi(`${g.inputRow};${cursorCol}H`)
+    );
+  }
+
   // ---- input parsing -----------------------------------------------------
 
   _feed(chunk) {
@@ -271,9 +292,9 @@ class PromptBox extends EventEmitter {
       if (ch === '\x7f' || ch === '\x08') { this._backspace(); i += 1; continue; }
       if (ch === '\x03') { this.emit('SIGINT'); i += 1; continue; }
       if (ch === '\x04') { if (!this.buffer) this.close(); i += 1; continue; }
-      if (ch === '\x15') { this.buffer = this.buffer.slice(this.cursor); this.cursor = 0; this._render(); i += 1; continue; }
-      if (ch === '\x01') { this.cursor = 0; this._render(); i += 1; continue; }
-      if (ch === '\x05') { this.cursor = this.buffer.length; this._render(); i += 1; continue; }
+      if (ch === '\x15') { this.buffer = this.buffer.slice(this.cursor); this.cursor = 0; this._renderInput(); i += 1; continue; }
+      if (ch === '\x01') { this.cursor = 0; this._renderInput(); i += 1; continue; }
+      if (ch === '\x05') { this.cursor = this.buffer.length; this._renderInput(); i += 1; continue; }
       if (ch === '\x17') { this._deleteWord(); i += 1; continue; }
       if (ch < ' ') { i += 1; continue; } // ignore other control chars
       // Printable run (fast path for typed/pasted text).
@@ -287,13 +308,13 @@ class PromptBox extends EventEmitter {
 
   _handleEscape(seq) {
     switch (seq) {
-      case '\x1b[D': case '\x1bOD': if (this.cursor > 0) { this.cursor -= 1; this._render(); } break;
-      case '\x1b[C': case '\x1bOC': if (this.cursor < this.buffer.length) { this.cursor += 1; this._render(); } break;
+      case '\x1b[D': case '\x1bOD': if (this.cursor > 0) { this.cursor -= 1; this._renderInput(); } break;
+      case '\x1b[C': case '\x1bOC': if (this.cursor < this.buffer.length) { this.cursor += 1; this._renderInput(); } break;
       case '\x1b[A': case '\x1bOA': this._history(-1); break;
       case '\x1b[B': case '\x1bOB': this._history(1); break;
-      case '\x1b[H': case '\x1b[1~': case '\x1bOH': this.cursor = 0; this._render(); break;
-      case '\x1b[F': case '\x1b[4~': case '\x1bOF': this.cursor = this.buffer.length; this._render(); break;
-      case '\x1b[3~': if (this.cursor < this.buffer.length) { this.buffer = this.buffer.slice(0, this.cursor) + this.buffer.slice(this.cursor + 1); this._render(); } break;
+      case '\x1b[H': case '\x1b[1~': case '\x1bOH': this.cursor = 0; this._renderInput(); break;
+      case '\x1b[F': case '\x1b[4~': case '\x1bOF': this.cursor = this.buffer.length; this._renderInput(); break;
+      case '\x1b[3~': if (this.cursor < this.buffer.length) { this.buffer = this.buffer.slice(0, this.cursor) + this.buffer.slice(this.cursor + 1); this._renderInput(); } break;
       default: break;
     }
   }
@@ -305,14 +326,14 @@ class PromptBox extends EventEmitter {
     this.buffer = this.buffer.slice(0, this.cursor) + text + this.buffer.slice(this.cursor);
     this.cursor += text.length;
     this.historyIndex = -1;
-    this._render();
+    this._renderInput();
   }
 
   _backspace() {
     if (this.cursor === 0) return;
     this.buffer = this.buffer.slice(0, this.cursor - 1) + this.buffer.slice(this.cursor);
     this.cursor -= 1;
-    this._render();
+    this._renderInput();
   }
 
   _deleteWord() {
@@ -322,7 +343,7 @@ class PromptBox extends EventEmitter {
     while (start > 0 && this.buffer[start - 1] !== ' ') start -= 1;
     this.buffer = this.buffer.slice(0, start) + this.buffer.slice(this.cursor);
     this.cursor = start;
-    this._render();
+    this._renderInput();
   }
 
   _history(direction) {
@@ -338,7 +359,7 @@ class PromptBox extends EventEmitter {
     else if (this.historyIndex < 0) { this.historyIndex = 0; }
     if (this.historyIndex !== -1) this.buffer = this.history[this.historyIndex];
     this.cursor = this.buffer.length;
-    this._render();
+    this._renderInput();
   }
 
   _submit() {
