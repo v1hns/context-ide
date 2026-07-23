@@ -40,7 +40,7 @@ class PromptBox extends EventEmitter {
     this.history = [];
     this.historyIndex = -1;
     this.stash = '';
-    this.paused = false;
+    this.busy = false;
     this.started = false;
     this.questionCb = null;
     this.pasting = false;
@@ -92,8 +92,10 @@ class PromptBox extends EventEmitter {
     this.emit('close');
   }
 
-  pause() { this.paused = true; }
-  resume() { this.paused = false; }
+  // "busy" means a turn is running: you can still type (the box stays live);
+  // only the status row is ceded to the spinner. It never stops input.
+  pause() { this.busy = true; }
+  resume() { this.busy = false; if (this.started) this._render(); }
 
   // ---- configuration -----------------------------------------------------
 
@@ -101,7 +103,7 @@ class PromptBox extends EventEmitter {
   setTitle(text, color) { this.titleText = text || ''; this._titleColor = color || C.dim; }
   setStatus(lines) { this.statusLines = Array.isArray(lines) ? lines : [lines]; if (this.started) this._render(); }
 
-  // Overwrite the status row directly, even while paused (used for the live
+  // Overwrite the status row directly, even while busy (used for the live
   // "cogitating" spinner during a turn). Leaves the input cursor untouched.
   setBusyLine(text) {
     if (!this.started) return;
@@ -170,7 +172,7 @@ class PromptBox extends EventEmitter {
   // ---- rendering ---------------------------------------------------------
 
   _render() {
-    if (!this.started || this.paused) return;
+    if (!this.started) return;
     const g = this._geometry();
     const width = g.cols;
     const color = this._titleColor || C.dim;
@@ -192,8 +194,11 @@ class PromptBox extends EventEmitter {
     let out = csi(`${g.topRow};1H`) + csi('2K') + clipVisible(top, width);
     out += csi(`${g.inputRow};1H`) + csi('2K') + input;
     out += csi(`${g.bottomRow};1H`) + csi('2K') + clipVisible(bottom, width);
-    for (let i = 0; i < this.statusHeight; i += 1) {
-      out += csi(`${g.statusRow + i};1H`) + csi('2K') + clipVisible(this.statusLines[i] || '', width);
+    // While a turn runs, the spinner owns the status row — don't overwrite it.
+    if (!this.busy) {
+      for (let i = 0; i < this.statusHeight; i += 1) {
+        out += csi(`${g.statusRow + i};1H`) + csi('2K') + clipVisible(this.statusLines[i] || '', width);
+      }
     }
     // Place the hardware cursor at the edit position inside the box.
     const cursorCol = gutterWidth + 1 + (this.cursor - offset);

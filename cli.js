@@ -64,6 +64,7 @@ function load() {
 let state = load();
 let busy = false;
 let restarting = false;
+let pendingInput = [];
 let registry = buildRegistry(state.customProviders);
 function rebuildRegistry() { registry = buildRegistry(state.customProviders); }
 const pasteStore = new PasteStore();
@@ -374,7 +375,7 @@ async function askAgent(text, options = {}) {
       return askAgent(text, { skipPreflight: true });
     }
   }
-  prompt();
+  drainOrPrompt();
 }
 
 async function gitCommand(input) {
@@ -408,7 +409,7 @@ async function gitCommand(input) {
   } finally {
     busy = false;
     rl.resume();
-    prompt();
+    drainOrPrompt();
   }
 }
 
@@ -640,7 +641,7 @@ function command(line) {
       if (!rest) console.log(`${C.bold}Rolling summary${C.reset}\n${tab.summary || '(none yet)'}`);
       else if (rest === 'now') {
         busy = true; rl.pause();
-        updateSummary(tab, tab.provider, true).then(changed => console.log(changed ? `${C.green}Summary updated.${C.reset}` : `${C.dim}Not enough history to summarize.${C.reset}`)).finally(() => { busy = false; rl.resume(); prompt(); });
+        updateSummary(tab, tab.provider, true).then(changed => console.log(changed ? `${C.green}Summary updated.${C.reset}` : `${C.dim}Not enough history to summarize.${C.reset}`)).finally(() => { busy = false; rl.resume(); drainOrPrompt(); });
         return;
       } else console.log(`${C.yellow}Usage: /summary or /summary now${C.reset}`);
       break;
@@ -698,19 +699,40 @@ function command(line) {
     case 'exit': save(); rl.close(); return;
     default: console.log(`${C.yellow}Unknown command. Type /help.${C.reset}`);
   }
-  prompt();
+  drainOrPrompt();
 }
 
-rl.on('line', line => {
-  const { text: raw, expanded } = pasteStore.expand(line);
-  const text = raw.trim();
-  if (!text) return prompt();
+// Run one submitted line: a command runs synchronously, a message starts a turn
+// (askAgent drains the queue when it finishes).
+function runInput(text, expanded) {
   if (expanded.length) {
     const total = expanded.reduce((sum, item) => sum + item.lines, 0);
     console.log(`${C.dim}⌷ expanded ${expanded.length} pasted block${expanded.length > 1 ? 's' : ''} (${total} lines)${C.reset}`);
   }
   if (text.startsWith('/')) command(text);
   else askAgent(text);
+}
+
+// After a turn or command finishes, run the next queued input, else re-prompt.
+function drainOrPrompt() {
+  if (!busy && pendingInput.length) {
+    const next = pendingInput.shift();
+    return runInput(next.text, next.expanded);
+  }
+  prompt();
+}
+
+rl.on('line', line => {
+  const { text: raw, expanded } = pasteStore.expand(line);
+  const text = raw.trim();
+  if (!text) { if (!busy) prompt(); return; }
+  // Typed while a turn is running: queue it to send when the turn finishes.
+  if (busy) {
+    pendingInput.push({ text, expanded });
+    console.log(`${C.dim}⏳ queued (${pendingInput.length}) — sends after this turn${C.reset}`);
+    return;
+  }
+  runInput(text, expanded);
 });
 rl.on('SIGINT', () => { console.log('\n'); save(); rl.close(); });
 rl.on('close', () => {
