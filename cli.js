@@ -84,21 +84,24 @@ function save() {
   fs.writeFileSync(STATE_FILE, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
 }
 
-// Write the current transcripts to a timestamped archive so a fresh session
-// never destroys prior context — it just sets it aside.
+// Write the current transcripts and universal context to a timestamped archive
+// so a fresh session never destroys prior context — it just sets it aside.
 function archiveSession() {
   const tabs = state.tabs.filter(tab => (tab.messages || []).length);
-  if (!tabs.length) return null;
+  if (!tabs.length && !state.universalContext) return null;
   fs.mkdirSync(HISTORY_DIR, { recursive: true, mode: 0o700 });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const file = path.join(HISTORY_DIR, `session-${stamp}.json`);
-  const snapshot = tabs.map(tab => ({ id: tab.id, title: tab.title, provider: tab.provider, messages: tab.messages, summary: tab.summary || '' }));
+  const snapshot = {
+    universalContext: state.universalContext || '',
+    tabs: tabs.map(tab => ({ id: tab.id, title: tab.title, provider: tab.provider, messages: tab.messages, summary: tab.summary || '' }))
+  };
   fs.writeFileSync(file, `${JSON.stringify(snapshot, null, 2)}\n`, { mode: 0o600 });
   return file;
 }
 
-// Start every launch with clean context. Config, tabs, providers, and universal
-// context are kept; only the conversation transcripts are archived and cleared.
+// Start every launch with clean context: transcripts AND the universal context
+// are archived and cleared. Config, tabs, and imported models are kept.
 function startFreshSession() {
   const archived = archiveSession();
   let cleared = 0;
@@ -109,8 +112,10 @@ function startFreshSession() {
     tab.summaryThrough = 0;
     tab.sessions = {};
   }
-  if (cleared) save();
-  return { archived, cleared };
+  const hadContext = Boolean(state.universalContext);
+  state.universalContext = '';
+  if (cleared || hadContext) save();
+  return { archived, cleared, hadContext };
 }
 
 function activeTab() {
@@ -523,6 +528,7 @@ ${C.bold}Shared context${C.reset}
   /context              show universal context
   /context set <text>   replace universal context
   /context add <text>   append universal context
+  /context clear        empty the universal context
 
 ${C.bold}GitHub workflow${C.reset}
   /git status           show repository status
@@ -666,9 +672,10 @@ function command(line) {
     }
     case 'context':
       if (!rest) console.log(`${C.bold}Universal context${C.reset}\n${state.universalContext || '(empty)'}`);
+      else if (rest === 'clear') { state.universalContext = ''; save(); console.log(`${C.green}Universal context cleared.${C.reset}`); }
       else if (rest.startsWith('set ')) { state.universalContext = rest.slice(4); save(); console.log(`${C.green}Context replaced.${C.reset}`); }
       else if (rest.startsWith('add ')) { state.universalContext += `${state.universalContext ? '\n' : ''}${rest.slice(4)}`; save(); console.log(`${C.green}Context added.${C.reset}`); }
-      else console.log(`${C.yellow}Usage: /context, /context set <text>, or /context add <text>${C.reset}`);
+      else console.log(`${C.yellow}Usage: /context, /context set <text>, /context add <text>, or /context clear${C.reset}`);
       break;
     case 'clear': tab.messages = []; tab.summary = ''; tab.summaryThrough = 0; tab.sessions = {}; save(); console.log(`${C.green}Conversation, summary, and native sessions cleared.${C.reset}`); break;
     case 'restart': restarting = true; save(); rl.close(); return;
@@ -713,7 +720,10 @@ let freshResult = null;
 if (!resuming && state.settings.freshSessions !== false) freshResult = startFreshSession();
 
 banner();
-if (freshResult && freshResult.cleared) {
-  console.log(`${C.dim}Started a fresh session. Archived ${freshResult.cleared} message${freshResult.cleared === 1 ? '' : 's'} from your last one${freshResult.archived ? ` → ${path.basename(freshResult.archived)}` : ''}.${C.reset}\n`);
+if (freshResult && (freshResult.cleared || freshResult.hadContext)) {
+  const bits = [];
+  if (freshResult.cleared) bits.push(`${freshResult.cleared} message${freshResult.cleared === 1 ? '' : 's'}`);
+  if (freshResult.hadContext) bits.push('universal context');
+  console.log(`${C.dim}Started a fresh session. Archived ${bits.join(' + ')} from your last one${freshResult.archived ? ` → ${path.basename(freshResult.archived)}` : ''}.${C.reset}\n`);
 }
 prompt();
