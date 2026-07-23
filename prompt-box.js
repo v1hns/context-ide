@@ -141,10 +141,16 @@ class PromptBox extends EventEmitter {
     if (!this.started) return;
     const g = this._geometry();
     // The terminal's reflow smears the pinned box during a drag. On settle,
-    // clear the screen and repaint the recent transcript (from our buffer)
-    // bottom-aligned, then the box — so no stale frames survive.
-    this._origOut(csi('r') + csi('2J') + csi(`1;${g.scrollBottom}r`) + csi(`${g.scrollBottom};1H`));
-    for (const line of this.scrollback.slice(-g.scrollBottom)) this._writeRegion(`${line}\n`);
+    // repaint the recent transcript (from our buffer) bottom-aligned by
+    // overwriting cells in place — NOT with a screen clear, which scrolls the
+    // old frames into scrollback and stacks copies there.
+    const visible = this.scrollback.slice(-g.scrollBottom);
+    const startRow = g.scrollBottom - visible.length + 1;
+    let out = csi('r'); // release the old scroll region
+    for (let row = 1; row < startRow; row += 1) out += csi(`${row};1H`) + csi('2K');
+    visible.forEach((line, index) => { out += csi(`${startRow + index};1H`) + csi('2K') + clipVisible(line, g.cols); });
+    out += csi(`1;${g.scrollBottom}r`) + csi(`${g.scrollBottom};1H`);
+    this._origOut(out);
     this._render();
   }
 

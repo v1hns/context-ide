@@ -298,6 +298,20 @@ function requestDelegation(from, reason) {
   });
 }
 
+// Turn a provider CLI's noisy multi-line failure into one readable line.
+function summarizeError(message) {
+  const text = String(message || '').trim();
+  if (/nodename nor servname|failed to lookup address|ENOTFOUND|EAI_AGAIN|dns|getaddrinfo|stream disconnected|ECONNREFUSED|ECONNRESET|ETIMEDOUT|network is unreachable|connection (refused|reset|timed out)/i.test(text)) {
+    return 'network error — could not reach the provider. Check your internet connection and try again.';
+  }
+  // Strip timestamped log prefixes and keep the last meaningful line.
+  const lines = text.split('\n')
+    .map(line => line.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z\s+(ERROR|WARN|INFO|DEBUG)\s+[^:]*:\s*/i, '').trim())
+    .filter(Boolean);
+  const summary = lines[lines.length - 1] || text;
+  return summary.length > 200 ? `${summary.slice(0, 197)}…` : summary;
+}
+
 async function askAgent(text, options = {}) {
   const tab = activeTab();
   const providerName = tab.provider;
@@ -360,7 +374,7 @@ async function askAgent(text, options = {}) {
     console.log(`${C.dim}✻ cogitated for ${elapsed}s · context ~${packed.estimatedTokens}/${packed.budget} tokens${nativeCapable ? ' · native session on' : ''}${C.reset}`);
   } catch (error) {
     limitFailure = recordLimitError(state, providerName, error.message);
-    console.error(`${C.red}Could not run ${providerName}: ${error.message}${C.reset}\n`);
+    console.error(`${C.red}Could not run ${providerName}: ${summarizeError(error.message)}${C.reset}\n`);
   } finally {
     if (spinnerTimer) clearInterval(spinnerTimer);
     busy = false;

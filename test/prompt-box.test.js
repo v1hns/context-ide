@@ -108,7 +108,7 @@ test('resize clears the screen and repaints buffered output', () => {
   writes.length = 0;
   box._resize();
   const out = writes.join('');
-  assert.ok(out.includes('\x1b[2J'), 'clears the screen');
   assert.ok(out.includes('alpha') && out.includes('bravo'), 'repaints buffered lines');
+  assert.ok(!out.includes('\x1b[2J'), 'does not clear the screen (no scrollback pollution)');
   box.close();
 });
