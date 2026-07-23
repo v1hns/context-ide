@@ -320,8 +320,17 @@ async function askAgent(text, options = {}) {
   }
   busy = true;
   rl.pause();
-  console.log(`${C.dim}✻ ${providerName} is cogitating…${C.reset}`);
   const startedAt = Date.now();
+  let spinnerTimer = null;
+  if (interactive) {
+    const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    let tick = 0;
+    const paint = () => rl.setBusyLine(` ${providerColor(providerName)}${frames[tick++ % frames.length]}${C.reset} ${C.dim}${providerName} cogitating… ${Math.round((Date.now() - startedAt) / 1000)}s${C.reset}`);
+    paint();
+    spinnerTimer = setInterval(paint, 100);
+  } else {
+    console.log(`${C.dim}✻ ${providerName} is cogitating…${C.reset}`);
+  }
   let limitFailure;
   try {
     await updateSummary(tab, providerName);
@@ -352,6 +361,7 @@ async function askAgent(text, options = {}) {
     limitFailure = recordLimitError(state, providerName, error.message);
     console.error(`${C.red}Could not run ${providerName}: ${error.message}${C.reset}\n`);
   } finally {
+    if (spinnerTimer) clearInterval(spinnerTimer);
     busy = false;
     rl.resume();
     save();
