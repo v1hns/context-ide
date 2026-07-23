@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFile, execFileSync } = require('node:child_process');
 
 let codexLimitCache = { checkedAt: 0, value: null };
 let claudeLimitCache = { checkedAt: 0, value: null };
@@ -197,6 +197,9 @@ function parseClaudeRateLimits(data) {
   return windows.length ? { windows } : null;
 }
 
+let claudeRefreshing = false;
+
+// Synchronous read, kept for callers/tests that want a blocking fetch.
 function readClaudeRateLimits() {
   if (Date.now() - claudeLimitCache.checkedAt < 180000) return claudeLimitCache.value;
   let value = null;
@@ -210,8 +213,7 @@ function readClaudeRateLimits() {
   return value;
 }
 
-function refreshClaudeLimit(state) {
-  const limits = readClaudeRateLimits();
+function applyClaudeLimit(state, limits) {
   if (!limits) return null;
   state.usage ||= {};
   const current = usageFor(state, 'claude');
@@ -220,6 +222,25 @@ function refreshClaudeLimit(state) {
   const resetAt = tightest.resetsAt ? new Date(tightest.resetsAt * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
   state.usage.claude = { ...current, remainingPercent: tightest.remainingPercent, status: tightest.remainingPercent === 0 ? 'exhausted' : 'ok', resetAt, limitWindows: limits.windows, limitSource: 'anthropic-oauth-usage' };
   return state.usage.claude;
+}
+
+// Non-blocking: render from the cached value immediately and fetch the fresh
+// one in the background so the UI never freezes on the keychain + network call.
+// `onUpdate` (optional) is invoked once new data lands so the caller can repaint.
+function refreshClaudeLimit(state, onUpdate) {
+  applyClaudeLimit(state, claudeLimitCache.value);
+  if (claudeRefreshing || Date.now() - claudeLimitCache.checkedAt < 180000) return state.usage?.claude || null;
+  claudeRefreshing = true;
+  claudeLimitCache = { checkedAt: Date.now(), value: claudeLimitCache.value };
+  execFile(process.execPath, [path.join(__dirname, 'claude-quota.js')], { encoding: 'utf8', timeout: 8000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+    claudeRefreshing = false;
+    if (error) return;
+    let value = null;
+    try { value = parseClaudeRateLimits(stdout); } catch { value = null; }
+    claudeLimitCache = { checkedAt: Date.now(), value };
+    if (applyClaudeLimit(state, value) && typeof onUpdate === 'function') onUpdate();
+  });
+  return state.usage?.claude || null;
 }
 
 module.exports = { blankUsage, detectLimitError, isLow, normalizeErrorMessage, parseClaudeRateLimits, parseCodexRateLimits, readClaudeRateLimits, readCodexRateLimits, recordLimitError, recordSuccess, refreshClaudeLimit, refreshCodexLimit, renderBar, sanitizeResetAt, sanitizeUsageEntry, score, setManualLimit, usageFor };
