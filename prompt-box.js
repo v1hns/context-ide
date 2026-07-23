@@ -46,6 +46,9 @@ class PromptBox extends EventEmitter {
     this.pasting = false;
     this.pasteBuffer = '';
     this.pending = '';
+    // Recent output lines, kept so we can repaint cleanly after a resize.
+    this.scrollback = [];
+    this._pendingLine = '';
     this._origOut = output.write.bind(output);
     this._origErr = (process.stderr.write || (() => {})).bind(process.stderr);
     this._onData = chunk => this._feed(chunk.toString('utf8'));
@@ -127,24 +130,33 @@ class PromptBox extends EventEmitter {
   _resize() {
     if (!this.started) return;
     const g = this._geometry();
-    // Release the old scroll region, wipe from the box area down (removing any
-    // frame the terminal's reflow left behind), then reserve and repaint once.
-    this._origOut(csi('r') + csi(`${Math.max(1, g.topRow)};1H`) + csi('0J') + csi(`1;${g.scrollBottom}r`) + csi(`${g.scrollBottom};1H`));
+    // The terminal's reflow smears the pinned box during a drag. On settle,
+    // clear the screen and repaint the recent transcript (from our buffer)
+    // bottom-aligned, then the box — so no stale frames survive.
+    this._origOut(csi('r') + csi('2J') + csi(`1;${g.scrollBottom}r`) + csi(`${g.scrollBottom};1H`));
+    for (const line of this.scrollback.slice(-g.scrollBottom)) this._writeRegion(`${line}\n`);
     this._render();
   }
 
   // ---- output above the box ---------------------------------------------
 
-  // Print program output into the scrolling region above the box. Each line is
-  // written on the bottom row of the region; its trailing newline scrolls the
-  // region up, leaving that row blank and ready for the next line.
+  // Print text into the scrolling region above the box, bottom-aligned. Each
+  // trailing newline scrolls the region up, leaving the bottom row ready.
+  _writeRegion(text) {
+    const g = this._geometry();
+    this._origOut('\x1b7' + csi(`${g.scrollBottom};1H`) + text.replace(/\r?\n/g, '\r\n') + '\x1b8');
+  }
+
   _above(text) {
     if (!this.started) { this._origOut(text); return; }
-    const g = this._geometry();
-    let out = '\x1b7' + csi(`${g.scrollBottom};1H`); // save cursor, go to region bottom
-    out += text.replace(/\r?\n/g, '\r\n');
-    out += '\x1b8'; // restore cursor (input position)
-    this._origOut(out);
+    // Record complete logical lines so a resize can repaint them.
+    const parts = (this._pendingLine + text).split('\n');
+    this._pendingLine = parts.pop();
+    for (const part of parts) {
+      this.scrollback.push(part.replace(/\r$/, ''));
+      if (this.scrollback.length > 2000) this.scrollback.splice(0, this.scrollback.length - 2000);
+    }
+    this._writeRegion(text);
   }
 
   // ---- rendering ---------------------------------------------------------

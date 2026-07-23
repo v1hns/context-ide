@@ -76,3 +76,21 @@ test('up arrow recalls the previous submitted line', () => {
   box._feed('\x1b[A');
   assert.equal(box.buffer, 'first');
 });
+
+test('resize clears the screen and repaints buffered output', () => {
+  const writes = [];
+  const input = { setRawMode() {}, resume() {}, setEncoding() {}, on() {}, off() {} };
+  const output = { isTTY: true, rows: 24, columns: 80, write(s) { writes.push(String(s)); return true; }, on() {}, off() {} };
+  const { PromptBox } = require('../prompt-box');
+  const box = new PromptBox({ input, output });
+  box.start();
+  box._above('alpha\n');
+  box._above('bravo\n');
+  assert.deepEqual(box.scrollback, ['alpha', 'bravo']);
+  writes.length = 0;
+  box._resize();
+  const out = writes.join('');
+  assert.ok(out.includes('\x1b[2J'), 'clears the screen');
+  assert.ok(out.includes('alpha') && out.includes('bravo'), 'repaints buffered lines');
+  box.close();
+});
