@@ -17,7 +17,7 @@ Like Claude Code and Codex, you type into a **bordered input box pinned to the b
 
 The box supports the usual line editing (arrows, Home/End, Ctrl-A/E/U/W, word delete) and recalls previous inputs with the up arrow. Each answer ends with a recap like `✻ cogitated for 4s · context ~5.2k/24k tokens`. Toggle the box off with `/config frame off` (then `/restart`) to fall back to a plain readline prompt with a single inline status line; non-interactive use (pipes, redirects) uses the plain prompt automatically.
 
-Every launch starts a **fresh session** with clean context, so a new conversation is never blended into whatever you were doing before. The previous transcript is archived to `~/.context-ide/history/` rather than discarded, and your config, tabs, imported models, and universal context are kept. A `/restart` (a code reload) resumes the in-progress conversation instead of clearing it. Turn the behavior off with `/config fresh off` to resume the last conversation on every launch.
+Every launch starts a **fresh session** with clean context, so a new conversation is never blended into whatever you were doing before. Both the transcript and the universal context are archived to `~/.context-ide/history/` and then cleared; your config, tabs, and imported models are kept. A `/restart` (a code reload) resumes the in-progress session instead of clearing it. Turn the behavior off with `/config fresh off` to resume the last conversation and context on every launch. Clear the universal context by hand any time with `/context clear`.
 
 Pasted text behaves like Claude Code and Codex: a multi-line or long paste collapses to a `[Pasted text #1 +12 lines]` placeholder in the prompt instead of flooding the line, and expands back to the full content when you send the message.
 
@@ -67,6 +67,7 @@ Workspace state is stored at `~/.context-ide/workspace.json` and is never commit
 | `/context` | Show universal context |
 | `/context set <text>` | Replace universal context |
 | `/context add <text>` | Append universal context |
+| `/context clear` | Empty the universal context |
 | `/clear` | Clear the active conversation |
 | `/status` | Show the active task, agent, and attachments |
 | `/usage` | Show measured calls/tokens and known remaining limits |
