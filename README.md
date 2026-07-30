@@ -182,3 +182,7 @@ API models make direct HTTPS calls to the base URL you supply, authenticated wit
 ## Permissions
 
 The child CLIs retain their own configured permissions and safety settings. Context IDE does not pass permission-bypass flags.
+
+## License
+
+[MIT](LICENSE) © 2026 Vihaan Shringi
